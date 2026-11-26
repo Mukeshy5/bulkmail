@@ -35,4 +35,30 @@ contextBridge.exposeInMainWorld('bulkMail', {
         contactIds,
       }),
   },
+  smtpAccounts: {
+    list: () => ipcRenderer.invoke('smtp-accounts:list'),
+    create: (input) => ipcRenderer.invoke('smtp-accounts:create', input),
+    update: (id, input) =>
+      ipcRenderer.invoke('smtp-accounts:update', { id, input }),
+    delete: (id) => ipcRenderer.invoke('smtp-accounts:delete', id),
+    setDefault: (id) => ipcRenderer.invoke('smtp-accounts:set-default', id),
+    test: (id) => ipcRenderer.invoke('smtp-accounts:test', id),
+  },
+  emailTemplates: {
+    list: () => ipcRenderer.invoke('email-templates:list'),
+    create: (input) => ipcRenderer.invoke('email-templates:create', input),
+    update: (id, input) =>
+      ipcRenderer.invoke('email-templates:update', { id, input }),
+    duplicate: (id) => ipcRenderer.invoke('email-templates:duplicate', id),
+    delete: (id) => ipcRenderer.invoke('email-templates:delete', id),
+  },
+  campaigns: {
+    list: (search) => ipcRenderer.invoke('campaigns:list', search),
+    get: (id) => ipcRenderer.invoke('campaigns:get', id),
+    create: (input) => ipcRenderer.invoke('campaigns:create', input),
+    update: (id, input) =>
+      ipcRenderer.invoke('campaigns:update', { id, input }),
+    duplicate: (id) => ipcRenderer.invoke('campaigns:duplicate', id),
+    delete: (id) => ipcRenderer.invoke('campaigns:delete', id),
+  },
 });

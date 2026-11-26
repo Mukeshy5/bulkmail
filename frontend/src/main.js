@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -24,6 +24,29 @@ import {
   importContacts,
   previewContactImport,
 } from './main/contact-import-service.js';
+import {
+  createSmtpAccount,
+  deleteSmtpAccount,
+  listSmtpAccounts,
+  setDefaultSmtpAccount,
+  testSmtpAccount,
+  updateSmtpAccount,
+} from './main/smtp-service.js';
+import {
+  createCampaignDraft,
+  deleteCampaignDraft,
+  duplicateCampaignDraft,
+  getCampaign,
+  listCampaigns,
+  updateCampaignDraft,
+} from './main/campaign-service.js';
+import {
+  createEmailTemplate,
+  deleteEmailTemplate,
+  duplicateEmailTemplate,
+  listEmailTemplates,
+  updateEmailTemplate,
+} from './main/email-template-service.js';
 import { loginUser, registerUser } from './main/auth-service.js';
 import { openUserDatabase } from './main/database.js';
 
@@ -33,6 +56,7 @@ const contactEditorRoles = new Set([
   'marketing_manager',
   'campaign_operator',
 ]);
+const smtpAdminRoles = new Set(['super_admin', 'administrator']);
 
 if (started) {
   app.quit();
@@ -68,6 +92,32 @@ const requireContactEditor = (event) => {
     throw new Error('Your account has read-only access.');
   }
   return user;
+};
+
+const requireSmtpAdmin = (event) => {
+  const user = getAuthenticatedUser(event);
+  if (!smtpAdminRoles.has(user.role)) {
+    throw new Error('Only administrators can manage SMTP accounts.');
+  }
+  return user;
+};
+
+const encryptSmtpSecret = (secret) => {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      'Secure credential storage is unavailable on this device. SMTP passwords were not saved.',
+    );
+  }
+  return safeStorage.encryptString(secret);
+};
+
+const decryptSmtpSecret = (encryptedSecret) => {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      'Secure credential storage is unavailable on this device. SMTP passwords cannot be accessed.',
+    );
+  }
+  return safeStorage.decryptString(encryptedSecret);
 };
 
 const registerIpcHandlers = () => {
@@ -199,6 +249,93 @@ const registerIpcHandlers = () => {
       return replaceContactListMembers(database, user.id, listId, contactIds);
     },
   );
+
+  ipcMain.handle('smtp-accounts:list', (event) => {
+    getAuthenticatedUser(event);
+    return listSmtpAccounts(database);
+  });
+
+  ipcMain.handle('smtp-accounts:create', (event, input) => {
+    const user = requireSmtpAdmin(event);
+    return createSmtpAccount(database, user.id, input, encryptSmtpSecret);
+  });
+
+  ipcMain.handle('smtp-accounts:update', (event, { id, input }) => {
+    const user = requireSmtpAdmin(event);
+    return updateSmtpAccount(database, user.id, id, input, encryptSmtpSecret);
+  });
+
+  ipcMain.handle('smtp-accounts:delete', (event, id) => {
+    const user = requireSmtpAdmin(event);
+    return deleteSmtpAccount(database, user.id, id);
+  });
+
+  ipcMain.handle('smtp-accounts:set-default', (event, id) => {
+    const user = requireSmtpAdmin(event);
+    return setDefaultSmtpAccount(database, user.id, id);
+  });
+
+  ipcMain.handle('smtp-accounts:test', (event, id) => {
+    const user = requireSmtpAdmin(event);
+    return testSmtpAccount(database, user.id, id, {
+      decryptSecret: decryptSmtpSecret,
+    });
+  });
+
+  ipcMain.handle('email-templates:list', (event) => {
+    getAuthenticatedUser(event);
+    return listEmailTemplates(database);
+  });
+
+  ipcMain.handle('email-templates:create', (event, input) => {
+    const user = requireContactEditor(event);
+    return createEmailTemplate(database, user.id, input);
+  });
+
+  ipcMain.handle('email-templates:update', (event, { id, input }) => {
+    const user = requireContactEditor(event);
+    return updateEmailTemplate(database, user.id, id, input);
+  });
+
+  ipcMain.handle('email-templates:duplicate', (event, id) => {
+    const user = requireContactEditor(event);
+    return duplicateEmailTemplate(database, user.id, id);
+  });
+
+  ipcMain.handle('email-templates:delete', (event, id) => {
+    const user = requireContactEditor(event);
+    return deleteEmailTemplate(database, user.id, id);
+  });
+
+  ipcMain.handle('campaigns:list', (event, search) => {
+    getAuthenticatedUser(event);
+    return listCampaigns(database, search);
+  });
+
+  ipcMain.handle('campaigns:get', (event, id) => {
+    getAuthenticatedUser(event);
+    return getCampaign(database, id);
+  });
+
+  ipcMain.handle('campaigns:create', (event, input) => {
+    const user = requireContactEditor(event);
+    return createCampaignDraft(database, user.id, input);
+  });
+
+  ipcMain.handle('campaigns:update', (event, { id, input }) => {
+    const user = requireContactEditor(event);
+    return updateCampaignDraft(database, user.id, id, input);
+  });
+
+  ipcMain.handle('campaigns:duplicate', (event, id) => {
+    const user = requireContactEditor(event);
+    return duplicateCampaignDraft(database, user.id, id);
+  });
+
+  ipcMain.handle('campaigns:delete', (event, id) => {
+    const user = requireContactEditor(event);
+    return deleteCampaignDraft(database, user.id, id);
+  });
 };
 
 const createWindow = () => {

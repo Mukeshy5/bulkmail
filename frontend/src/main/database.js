@@ -103,6 +103,67 @@ const migrations = [
     INSERT OR IGNORE INTO suppression_list (email, reason, source, created_at)
     VALUES (NEW.email, NEW.subscription_status, 'contact', NEW.updated_at);
   END;`,
+  `CREATE TABLE smtp_accounts (
+    id TEXT PRIMARY KEY,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    encryption TEXT NOT NULL CHECK (encryption IN ('ssl', 'starttls', 'none')),
+    username TEXT NOT NULL,
+    encrypted_password BLOB NOT NULL,
+    sender_name TEXT NOT NULL,
+    sender_email TEXT NOT NULL COLLATE NOCASE,
+    reply_to_email TEXT NOT NULL DEFAULT '',
+    is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0, 1)),
+    is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+    connection_status TEXT NOT NULL DEFAULT 'untested'
+      CHECK (connection_status IN ('untested', 'connected', 'failed')),
+    last_tested_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (is_default = 0 OR is_enabled = 1)
+  );
+  CREATE INDEX smtp_accounts_enabled_idx ON smtp_accounts (is_enabled);
+  CREATE UNIQUE INDEX smtp_accounts_single_default_idx
+    ON smtp_accounts (is_default) WHERE is_default = 1;`,
+  `CREATE TABLE email_templates (
+    id TEXT PRIMARY KEY,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    html_body TEXT NOT NULL,
+    text_body TEXT NOT NULL DEFAULT '',
+    is_system INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX email_templates_updated_at_idx ON email_templates (updated_at DESC);
+
+  CREATE TABLE campaigns (
+    id TEXT PRIMARY KEY,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    campaign_type TEXT NOT NULL DEFAULT 'marketing'
+      CHECK (campaign_type IN ('marketing', 'newsletter', 'promotion', 'announcement', 'customer_update', 'transactional')),
+    subject TEXT NOT NULL DEFAULT '',
+    sender_name TEXT NOT NULL DEFAULT '',
+    sender_email TEXT NOT NULL DEFAULT '',
+    reply_to_email TEXT NOT NULL DEFAULT '',
+    recipient_list_id TEXT REFERENCES contact_lists(id) ON DELETE SET NULL,
+    template_id TEXT REFERENCES email_templates(id) ON DELETE SET NULL,
+    smtp_account_id TEXT REFERENCES smtp_accounts(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK (status IN ('draft', 'scheduled', 'processing', 'sending', 'paused', 'completed', 'failed', 'cancelled')),
+    scheduled_at TEXT,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX campaigns_status_updated_idx ON campaigns (status, updated_at DESC);
+  CREATE INDEX campaigns_schedule_idx ON campaigns (status, scheduled_at);`,
 ];
 
 export function openDatabase(databasePath) {
@@ -125,7 +186,82 @@ export function openDatabase(databasePath) {
     version = targetVersion;
   }
 
+  seedDefaultTemplates(database);
   return database;
+}
+
+function seedDefaultTemplates(database) {
+  const now = new Date().toISOString();
+  const templates = [
+    [
+      'template-welcome',
+      'Welcome Email',
+      'A permission-based welcome for new subscribers.',
+      'Welcome to our community, {{first_name}}',
+      '<h1>Welcome, {{first_name}}!</h1><p>We are glad you joined us. Here is what you can expect from our updates.</p><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Welcome, {{first_name}}! We are glad you joined us. You can unsubscribe at {{unsubscribe_url}}.',
+    ],
+    [
+      'template-business-intro',
+      'Business Introduction',
+      'Introduce your organization and its services.',
+      'A quick introduction from {{company}}',
+      '<h1>Hello {{full_name}},</h1><p>We would like to introduce our team and explain how we can support your work.</p><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Hello {{full_name}}, we would like to introduce our team. Unsubscribe: {{unsubscribe_url}}.',
+    ],
+    [
+      'template-newsletter',
+      'Newsletter',
+      'A simple layout for recurring news and updates.',
+      'The latest updates from our team',
+      '<h1>Monthly update</h1><p>Hello {{first_name}}, here are the latest updates from our team.</p><hr /><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Hello {{first_name}}, here are the latest updates from our team. Unsubscribe: {{unsubscribe_url}}.',
+    ],
+    [
+      'template-promotion',
+      'Promotional Offer',
+      'Share a time-limited offer with opted-in recipients.',
+      'An offer selected for you',
+      '<h1>A special offer</h1><p>Hello {{first_name}}, take a look at the offer we prepared for you.</p><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Hello {{first_name}}, take a look at the offer we prepared for you. Unsubscribe: {{unsubscribe_url}}.',
+    ],
+    [
+      'template-product',
+      'Product Announcement',
+      'Announce a product update or new feature.',
+      'Introducing our latest update',
+      '<h1>Introducing our latest update</h1><p>Hello {{first_name}}, learn what is new and how it can help your team.</p><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Hello {{first_name}}, learn what is new and how it can help your team. Unsubscribe: {{unsubscribe_url}}.',
+    ],
+    [
+      'template-follow-up',
+      'Customer Follow-up',
+      'Follow up with existing customers.',
+      'Checking in, {{first_name}}',
+      '<h1>Checking in</h1><p>Hello {{first_name}}, we hope everything is going well. Reply if you need help.</p><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Hello {{first_name}}, we hope everything is going well. Unsubscribe: {{unsubscribe_url}}.',
+    ],
+    [
+      'template-event',
+      'Event Invitation',
+      'Invite opted-in contacts to an event.',
+      'You are invited to our upcoming event',
+      '<h1>You are invited</h1><p>Hello {{first_name}}, join us for an upcoming event with our team.</p><p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>',
+      'Hello {{first_name}}, join us for an upcoming event with our team. Unsubscribe: {{unsubscribe_url}}.',
+    ],
+  ];
+  const insert = database.prepare(
+    `INSERT OR IGNORE INTO email_templates (
+      id, name, description, subject, html_body, text_body,
+      is_system, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+  );
+  const seed = database.transaction(() => {
+    for (const template of templates) {
+      insert.run(...template, now, now);
+    }
+  });
+  seed.immediate();
 }
 
 export function openUserDatabase(userDataPath) {

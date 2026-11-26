@@ -2,6 +2,9 @@ import { useState } from 'react';
 import ContactLists from './ContactLists.jsx';
 import Contacts from './Contacts.jsx';
 import Dashboard from './Dashboard.jsx';
+import Campaigns from './Campaigns.jsx';
+import EmailTemplates from './EmailTemplates.jsx';
+import SmtpAccounts from './SmtpAccounts.jsx';
 import { Logo, useToast } from './ui.jsx';
 
 const editorRoles = new Set([
@@ -15,6 +18,9 @@ const navigation = [
   { id: 'dashboard', label: 'Overview', icon: '▦' },
   { id: 'contacts', label: 'Contacts', icon: '✉' },
   { id: 'lists', label: 'Contact lists', icon: '◫' },
+  { id: 'templates', label: 'Email templates', icon: '▤' },
+  { id: 'campaigns', label: 'Campaign drafts', icon: '↗' },
+  { id: 'smtp', label: 'SMTP accounts', icon: '⇄' },
 ];
 
 export default function Workspace({ user, onSignOut }) {
@@ -133,6 +139,17 @@ export default function Workspace({ user, onSignOut }) {
             )}
             {page === 'lists' && (
               <ContactLists canEdit={canEdit} initialAction={initialAction} />
+            )}
+            {page === 'templates' && (
+              <EmailTemplates canEdit={canEdit} initialAction={initialAction} />
+            )}
+            {page === 'campaigns' && (
+              <Campaigns canEdit={canEdit} initialAction={initialAction} />
+            )}
+            {page === 'smtp' && (
+              <SmtpAccounts
+                canManage={['super_admin', 'administrator'].includes(user.role)}
+              />
             )}
           </main>
         </div>
