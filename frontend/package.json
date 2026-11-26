@@ -18,8 +18,7 @@
     "make": "npm run package && electron-builder --win nsis --x64 --prepackaged \"out/Bulk Mail Sender-win32-x64\"",
     "release": "electron-forge release",
     "lint": "oxlint && oxfmt --check",
-    "lint:fix": "oxlint --fix && oxfmt --write",
-    "test": "node --test"
+    "lint:fix": "oxlint --fix && oxfmt --write"
   },
   "devDependencies": {
     "@electron-forge/cli": "^8.0.1",
@@ -40,17 +39,11 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.5",
-    "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^13.2.0",
-    "csv-parse": "^7.0.3",
     "electron-squirrel-startup": "^1.0.1",
-    "exceljs": "^4.4.0",
     "lucide-react": "^1.81.0",
-    "nodemailer": "^10.6.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "recharts": "^3.11.1",
-    "sanitize-html": "^2.18.2",
     "tailwindcss": "^4.3.5"
   }
 }

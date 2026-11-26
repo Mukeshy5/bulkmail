@@ -5,42 +5,9 @@ import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
-import { cp, mkdir } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const sqlitePackage = fileURLToPath(
-  new URL('./node_modules/better-sqlite3', import.meta.url),
-);
-
 const config = {
   packagerConfig: {
-    asar: { unpack: '**/*.node' },
-  },
-  hooks: {
-    packageAfterCopy: async (
-      _config,
-      directory,
-      _electronVersion,
-      platform,
-      arch,
-    ) => {
-      const target = path.join(directory, 'node_modules', 'better-sqlite3');
-      await mkdir(path.join(target, 'prebuilds'), { recursive: true });
-      for (const entry of [
-        'package.json',
-        'LICENSE',
-        'lib',
-        path.join('prebuilds', platform + '-' + arch + '.node'),
-      ]) {
-        await cp(path.join(sqlitePackage, entry), path.join(target, entry), {
-          recursive: true,
-        });
-      }
-    },
-  },
-  rebuildConfig: {
-    ignoreModules: ['better-sqlite3'],
+    asar: true,
   },
   makers: [
     new MakerSquirrel({}),

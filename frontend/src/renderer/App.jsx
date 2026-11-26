@@ -98,7 +98,7 @@ export default function App() {
               onClick={() => window.location.reload()}
               type="button"
             >
-              Restart
+              Retry connection
             </button>
           </section>
         </main>
