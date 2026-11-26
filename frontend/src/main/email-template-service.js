@@ -18,6 +18,8 @@ function templateFromRow(row) {
     subject: row.subject,
     htmlBody: row.html_body,
     textBody: row.text_body,
+    category: row.category,
+    design: row.design ? JSON.parse(row.design) : null,
     isSystem: Boolean(row.is_system),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -52,6 +54,36 @@ function validateTemplate(input) {
   const subject = typeof input.subject === 'string' ? input.subject.trim() : '';
   const htmlBody = typeof input.htmlBody === 'string' ? input.htmlBody : '';
   const textBody = typeof input.textBody === 'string' ? input.textBody : '';
+  const category = [
+    'Business',
+    'Marketing',
+    'Newsletter',
+    'Events',
+    'Customer Communication',
+  ].includes(input.category)
+    ? input.category
+    : 'General';
+  const design = input.design == null ? null : JSON.stringify(input.design);
+  if (
+    design &&
+    (!Array.isArray(input.design) ||
+      input.design.length > 100 ||
+      Buffer.byteLength(design) > MAX_HTML_BYTES ||
+      !input.design.every(
+        (block) =>
+          block &&
+          typeof block.type === 'string' &&
+          typeof block.id === 'string' &&
+          Object.values(block).every(
+            (value) => typeof value === 'string' || typeof value === 'number',
+          ),
+      ))
+  ) {
+    return {
+      ok: false,
+      error: 'The visual design exceeds the supported block count or size.',
+    };
+  }
 
   if (!name || name.length > 100 || hasHeaderControls(name)) {
     return { ok: false, error: 'Enter a template name up to 100 characters.' };
@@ -83,7 +115,15 @@ function validateTemplate(input) {
 
   return {
     ok: true,
-    template: { name, description, subject, htmlBody, textBody },
+    template: {
+      name,
+      description,
+      subject,
+      htmlBody,
+      textBody,
+      category,
+      design,
+    },
   };
 }
 
@@ -108,8 +148,8 @@ export function createEmailTemplate(database, actorUserId, input) {
         .prepare(
           `INSERT INTO email_templates (
             id, created_by, name, description, subject, html_body,
-            text_body, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            text_body, category, design, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -119,6 +159,8 @@ export function createEmailTemplate(database, actorUserId, input) {
           validated.template.subject,
           validated.template.htmlBody,
           validated.template.textBody,
+          validated.template.category,
+          validated.template.design,
           now,
           now,
         );
@@ -147,10 +189,15 @@ export function createEmailTemplate(database, actorUserId, input) {
 
 export function updateEmailTemplate(database, actorUserId, id, input) {
   const existing = database
-    .prepare('SELECT id FROM email_templates WHERE id = ?')
+    .prepare('SELECT id, is_system, category FROM email_templates WHERE id = ?')
     .get(id);
   if (!existing) return { ok: false, error: 'Email template not found.' };
-  const validated = validateTemplate(input);
+  if (existing.is_system)
+    return {
+      ok: false,
+      error: 'Duplicate the built-in template to customize it.',
+    };
+  const validated = validateTemplate({ category: existing.category, ...input });
   if (!validated.ok) return validated;
   const now = new Date().toISOString();
   try {
@@ -159,7 +206,7 @@ export function updateEmailTemplate(database, actorUserId, id, input) {
         .prepare(
           `UPDATE email_templates SET
             name = ?, description = ?, subject = ?, html_body = ?,
-            text_body = ?, updated_at = ?
+            text_body = ?, category = ?, design = ?, updated_at = ?
           WHERE id = ?`,
         )
         .run(
@@ -168,6 +215,8 @@ export function updateEmailTemplate(database, actorUserId, id, input) {
           validated.template.subject,
           validated.template.htmlBody,
           validated.template.textBody,
+          validated.template.category,
+          validated.template.design,
           now,
           id,
         );
@@ -216,6 +265,8 @@ export function duplicateEmailTemplate(database, actorUserId, id) {
     subject: template.subject,
     htmlBody: template.html_body,
     textBody: template.text_body,
+    category: template.category,
+    design: template.design ? JSON.parse(template.design) : null,
   });
 }
 

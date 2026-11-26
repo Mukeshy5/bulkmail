@@ -1,259 +1,268 @@
-import { useState } from 'react';
-import { Logo } from './ui.jsx';
+import { useEffect, useState } from 'react';
+import { ArrowUpRight, Eye, EyeOff, Mail, ShieldCheck } from 'lucide-react';
 
-const initialForm = {
+const blank = {
   fullName: '',
   username: '',
   email: '',
   password: '',
-  confirmPassword: '',
+  confirm: '',
+  code: '',
+  remember: false,
 };
 
 export default function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState('login');
-  const [form, setForm] = useState(initialForm);
+  const [mode, setMode] = useState(null);
+  const [form, setForm] = useState(blank);
+  const [visible, setVisible] = useState(false);
   const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState('error');
+  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    window.bulkMail.auth
+      .needsSetup()
+      .then((result) => {
+        if (active) setMode(result.needsSetup ? 'setup' : 'login');
+      })
+      .catch((cause) => {
+        if (active) setError(cause.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  const isRegistration = mode === 'register';
-  const update = (event) => {
-    setForm({ ...form, [event.target.name]: event.target.value });
-  };
+  const setup = mode === 'setup';
+  const reset = mode === 'reset';
+  const title = setup
+    ? 'Set up your workspace'
+    : reset
+      ? 'Reset your password'
+      : 'Sign in';
+  const text = (name) => ({
+    value: form[name],
+    onChange: (e) => setForm({ ...form, [name]: e.target.value }),
+  });
 
-  async function submit(event) {
-    event.preventDefault();
+  async function submit(e) {
+    e.preventDefault();
+    setError('');
     setMessage('');
-    if (!event.currentTarget.reportValidity()) return;
-    if (isRegistration && form.password !== form.confirmPassword) {
-      setMessage('Passwords do not match.');
+    if (mode !== 'login' && form.confirm !== form.password) {
+      setError('Passwords do not match.');
       return;
     }
-
     setBusy(true);
     try {
-      const credentials = Object.fromEntries(
-        Object.entries(form).filter(([key]) => key !== 'confirmPassword'),
-      );
-      const result = isRegistration
-        ? await window.bulkMail.auth.register(credentials)
-        : await window.bulkMail.auth.login(credentials);
-      if (!result.ok) {
-        setMessage(result.error);
+      const result = await (setup
+        ? window.bulkMail.auth.register(form)
+        : reset
+          ? window.bulkMail.workspace.resetPassword({
+              code: form.code,
+              password: form.password,
+            })
+          : window.bulkMail.auth.login(form));
+      if (!result.ok) throw new Error(result.error);
+      if (mode === 'login') {
+        onAuthenticated(result.user);
         return;
       }
-
-      if (isRegistration) {
-        setForm({ ...initialForm, username: form.username });
-        setMode('login');
-        setMessageType('success');
-        setMessage(
-          `Account created with ${result.user.role.replaceAll('_', ' ')} access. Sign in to continue.`,
-        );
-        return;
-      }
-      onAuthenticated(result.user);
-    } catch (error) {
+      setForm({ ...blank, username: setup ? form.username : '' });
+      setMode('login');
       setMessage(
-        error instanceof Error
-          ? error.message
-          : 'The request could not be completed. Please try again.',
+        setup
+          ? 'Super Admin account created. Sign in to continue.'
+          : 'Password reset. Sign in with your new password.',
       );
+    } catch (cause) {
+      setError(cause.message);
     } finally {
       setBusy(false);
     }
   }
 
-  const inputClass =
-    'mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-400/10';
-
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-10 sm:px-8">
-      <section className="grid w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl shadow-black/40 lg:grid-cols-[1.05fr_0.95fr]">
-        <aside className="hidden flex-col justify-between bg-gradient-to-br from-indigo-600 via-indigo-700 to-slate-900 p-10 lg:flex">
-          <div>
-            <Logo />
-            <p className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-indigo-200">
-              Bulk Mail Sender
-            </p>
-          </div>
-          <div>
-            <h1 className="max-w-md text-4xl font-semibold leading-tight tracking-tight text-white">
-              Thoughtful email campaigns start here.
-            </h1>
-            <p className="mt-4 max-w-md leading-7 text-indigo-100/80">
-              A private desktop workspace for organizing contacts and managing
-              permission-based email campaigns.
-            </p>
-          </div>
-          <p className="text-sm text-indigo-200/70">
-            Your workspace data stays on this device.
-          </p>
-        </aside>
-
-        <div className="p-6 sm:p-10 lg:p-12">
-          <div className="lg:hidden">
-            <Logo />
-          </div>
-          <p className="mt-6 text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
-            {isRegistration ? 'Create workspace access' : 'Secure workspace'}
-          </p>
-          <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">
-            {isRegistration ? 'Create your account' : 'Welcome back'}
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            {isRegistration
-              ? 'Create an account to begin setting up your local workspace.'
-              : 'Sign in to continue to your email campaign workspace.'}
-          </p>
-
-          <form className="mt-8" onSubmit={submit}>
-            {isRegistration && (
-              <>
-                <label
-                  className="block text-sm font-medium text-slate-300"
-                  htmlFor="fullName"
-                >
-                  Full name
-                </label>
-                <input
-                  id="fullName"
-                  className={inputClass}
-                  name="fullName"
-                  autoComplete="name"
-                  minLength={2}
-                  maxLength={100}
-                  required
-                  value={form.fullName}
-                  onChange={update}
-                />
-                <label
-                  className="mt-4 block text-sm font-medium text-slate-300"
-                  htmlFor="email"
-                >
-                  Email address
-                </label>
-                <input
-                  id="email"
-                  className={inputClass}
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  maxLength={254}
-                  required
-                  value={form.email}
-                  onChange={update}
-                />
-              </>
-            )}
-
-            <label
-              className={`${isRegistration ? 'mt-4' : ''} block text-sm font-medium text-slate-300`}
-              htmlFor="username"
-            >
-              Username
-            </label>
-            <input
-              id="username"
-              className={inputClass}
-              name="username"
-              autoComplete="username"
-              minLength={3}
-              maxLength={30}
-              pattern="[A-Za-z0-9._-]+"
-              required
-              value={form.username}
-              onChange={update}
-            />
-
-            <label
-              className="mt-5 block text-sm font-medium text-slate-300"
-              htmlFor="password"
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              className={inputClass}
-              name="password"
-              type="password"
-              autoComplete={
-                isRegistration ? 'new-password' : 'current-password'
-              }
-              minLength={isRegistration ? 12 : undefined}
-              maxLength={128}
-              required
-              value={form.password}
-              onChange={update}
-            />
-
-            {isRegistration && (
-              <>
-                <p className="mt-2 text-xs text-slate-500">
-                  Use at least 12 characters with mixed case and a symbol.
-                </p>
-                <label
-                  className="mt-4 block text-sm font-medium text-slate-300"
-                  htmlFor="confirmPassword"
-                >
-                  Confirm password
-                </label>
-                <input
-                  id="confirmPassword"
-                  className={inputClass}
-                  name="confirmPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  maxLength={128}
-                  required
-                  value={form.confirmPassword}
-                  onChange={update}
-                />
-              </>
-            )}
-
-            <p
-              className={`mt-4 min-h-5 text-sm ${messageType === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}
-              role="status"
-              aria-live="polite"
-            >
-              {message}
-            </p>
-            <button
-              className="mt-3 flex w-full items-center justify-center rounded-xl bg-indigo-500 px-4 py-3 font-semibold text-white transition hover:bg-indigo-400 focus:outline-none focus:ring-4 focus:ring-indigo-400/30 disabled:cursor-wait disabled:opacity-60"
-              type="submit"
-              disabled={busy}
-            >
-              {busy
-                ? 'Please wait…'
-                : isRegistration
-                  ? 'Create account'
-                  : 'Sign in'}
-            </button>
-          </form>
-
-          <p className="mt-7 text-center text-sm text-slate-400">
-            {isRegistration
-              ? 'Already have an account?'
-              : 'New to Bulk Mail Sender?'}
-            <button
-              className="ml-1 font-semibold text-indigo-300 hover:text-indigo-200"
-              type="button"
-              onClick={() => {
-                setMode(isRegistration ? 'login' : 'register');
-                setMessage('');
-                setMessageType('error');
-              }}
-            >
-              {isRegistration ? 'Sign in' : 'Create an account'}
-            </button>
-          </p>
-          <p className="mt-8 border-t border-slate-800 pt-5 text-center text-xs leading-5 text-slate-500">
-            The first account created on this device becomes the super
-            administrator. New self-registered accounts have viewer access.
+    <main className="auth-layout">
+      <aside className="auth-aside">
+        <div className="auth-brand">
+          <Mail size={23} /> Bulk Mail Sender Pro
+        </div>
+        <div>
+          <h1>
+            Your email campaigns.
+            <br />
+            One workspace.
+          </h1>
+          <p>
+            Design emails, organize subscribers, and track campaign activity
+            from your desktop.
           </p>
         </div>
+        <div className="auth-foot">
+          <ShieldCheck size={18} /> Local workspace · SQLite
+        </div>
+      </aside>
+      <section className="auth-content">
+        <div className="auth-brand auth-small-brand">
+          <Mail size={23} /> Bulk Mail Sender Pro
+        </div>
+        {!mode ? (
+          <p role="status">{error || 'Checking workspace setup…'}</p>
+        ) : (
+          <>
+            <h2>{title}</h2>
+            <p>
+              {setup
+                ? 'Create the first Super Admin account for this workspace.'
+                : reset
+                  ? 'Use a recovery code from your account settings or contact your workspace administrator.'
+                  : 'Enter your workspace credentials.'}
+            </p>
+            <form className="auth-form" onSubmit={submit}>
+              {setup && (
+                <label>
+                  Full name
+                  <input
+                    {...text('fullName')}
+                    required
+                    minLength={2}
+                    maxLength={100}
+                    autoComplete="name"
+                  />
+                </label>
+              )}
+              {!reset && (
+                <label>
+                  {setup ? 'Username' : 'Username or email'}
+                  <input
+                    {...text('username')}
+                    required
+                    maxLength={setup ? 30 : 254}
+                    minLength={setup ? 3 : 1}
+                    autoComplete="username"
+                  />
+                </label>
+              )}
+              {setup && (
+                <label>
+                  Email address
+                  <input
+                    {...text('email')}
+                    type="email"
+                    required
+                    maxLength={254}
+                    autoComplete="email"
+                  />
+                </label>
+              )}
+              {reset && (
+                <label>
+                  Recovery code
+                  <input
+                    {...text('code')}
+                    required
+                    minLength={32}
+                    maxLength={32}
+                    autoComplete="off"
+                  />
+                </label>
+              )}
+              <label>
+                {reset ? 'New password' : 'Password'}
+                <span className="auth-password">
+                  <input
+                    {...text('password')}
+                    type={visible ? 'text' : 'password'}
+                    autoComplete={
+                      mode === 'login' ? 'current-password' : 'new-password'
+                    }
+                    minLength={mode === 'login' ? 1 : 12}
+                    maxLength={128}
+                    required
+                  />
+                  <button
+                    type="button"
+                    aria-label={visible ? 'Hide password' : 'Show password'}
+                    onClick={() => setVisible(!visible)}
+                  >
+                    {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </span>
+              </label>
+              {mode !== 'login' && (
+                <label>
+                  Confirm password
+                  <input
+                    {...text('confirm')}
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    minLength={12}
+                    maxLength={72}
+                  />
+                </label>
+              )}
+              {mode === 'login' && (
+                <div className="auth-options">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.remember}
+                      onChange={(e) =>
+                        setForm({ ...form, remember: e.target.checked })
+                      }
+                    />{' '}
+                    Remember me
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('reset');
+                      setForm(blank);
+                      setError('');
+                      setMessage('');
+                    }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+              {error && (
+                <p role="alert" className="studio-error">
+                  {error}
+                </p>
+              )}
+              {message && <p role="status">{message}</p>}
+              <button
+                className="studio-button studio-primary auth-submit"
+                disabled={busy}
+              >
+                {busy
+                  ? 'Please wait…'
+                  : setup
+                    ? 'Create workspace'
+                    : reset
+                      ? 'Reset password'
+                      : 'Sign in'}{' '}
+                <ArrowUpRight size={18} />
+              </button>
+              {reset && (
+                <button
+                  className="studio-button"
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setForm(blank);
+                    setError('');
+                  }}
+                >
+                  Back to sign in
+                </button>
+              )}
+            </form>
+          </>
+        )}
       </section>
     </main>
   );

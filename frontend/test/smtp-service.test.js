@@ -65,6 +65,47 @@ test('SMTP credentials are encrypted at rest and omitted from list results', () 
   assert.equal('encrypted_password' in listed.accounts[0], false);
 });
 
+test('Microsoft OAuth2 credentials stay encrypted and are passed to the registered provider', async () => {
+  const database = createTestDatabase();
+  const input = smtpInput({
+    host: 'smtp.office365.com',
+    authType: 'microsoft',
+    oauthClientId: 'example-client-id',
+    password: 'test-refresh-token',
+    oauthClientSecret: 'test-client-secret',
+  });
+  const created = createSmtpAccount(database, null, input, encryptSecret);
+  assert.ok(created.ok, created.error);
+  assert.equal(created.account.authType, 'microsoft');
+  assert.equal('oauthClientSecret' in created.account, false);
+  assert.equal('oauthClientId' in created.account, false);
+  let options;
+  const result = await testSmtpAccount(database, null, created.account.id, {
+    decryptSecret: (buffer) => buffer.toString().slice('encrypted:'.length),
+    createTransport: (config) => {
+      options = config;
+      return { verify: async () => {}, close() {} };
+    },
+  });
+  assert.ok(result.ok, result.error);
+  assert.equal(options.requireTLS, true);
+  assert.equal(options.auth.type, 'OAuth2');
+  assert.equal(options.auth.refreshToken, 'test-refresh-token');
+  assert.equal(
+    options.auth.accessUrl,
+    'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+  );
+  assert.equal(
+    createSmtpAccount(
+      database,
+      null,
+      { ...input, host: 'smtp.example.test' },
+      encryptSecret,
+    ).ok,
+    false,
+  );
+});
+
 test('SMTP validation rejects invalid settings without storing an account', () => {
   const database = createTestDatabase();
   const result = createSmtpAccount(

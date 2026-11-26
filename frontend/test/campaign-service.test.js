@@ -28,7 +28,7 @@ function createTestDatabase() {
 
 function templateInput(overrides = {}) {
   return {
-    name: 'Customer update',
+    name: 'Customer account update',
     description: 'Update for existing customers',
     subject: 'An update for {{first_name}}',
     htmlBody: '<h1>Hello {{first_name}}</h1>',
@@ -64,8 +64,8 @@ test('built-in templates seed once and cannot be deleted', () => {
   const first = listEmailTemplates(database);
   const second = listEmailTemplates(database);
 
-  assert.equal(first.templates.length, 7);
-  assert.equal(second.templates.length, 7);
+  assert.equal(first.templates.length, 19);
+  assert.equal(second.templates.length, 19);
   assert.equal(
     first.templates.every((template) => template.isSystem),
     true,
@@ -98,7 +98,7 @@ test('custom templates support create, update, duplicate and delete', () => {
     created.template.id,
   );
   assert.equal(duplicated.ok, true);
-  assert.equal(duplicated.template.name, 'Customer update copy');
+  assert.equal(duplicated.template.name, 'Customer account update copy');
   assert.equal(
     deleteEmailTemplate(database, null, created.template.id).ok,
     true,

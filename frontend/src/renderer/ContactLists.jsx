@@ -3,10 +3,12 @@ import { ErrorPanel, Modal, PageHeading, useToast } from './ui.jsx';
 
 const memberPageSize = 50;
 
-export default function ContactLists({ canEdit, initialAction }) {
+export default function ContactLists({ canEdit, initialAction, navigate }) {
   const [lists, setLists] = useState([]);
-  const [search, setSearch] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [search, setSearch] = useState(initialAction?.search || '');
+  const [appliedSearch, setAppliedSearch] = useState(
+    initialAction?.search || '',
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
@@ -232,7 +234,7 @@ export default function ContactLists({ canEdit, initialAction }) {
                 <th className="px-4 py-3">List</th>
                 <th className="px-4 py-3">Contacts</th>
                 <th className="px-4 py-3">Subscribed</th>
-                <th className="px-4 py-3">Updated</th>
+                <th className="px-4 py-3">Created</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -266,14 +268,43 @@ export default function ContactLists({ canEdit, initialAction }) {
                         {list.subscribedCount}
                       </span>
                       <span className="ml-1 text-xs text-slate-400">
-                        eligible subscriber records
+                        · {list.unsubscribedCount} unsubscribed
                       </span>
                     </td>
                     <td className="px-4 py-4 text-sm text-slate-500">
-                      {new Date(list.updatedAt).toLocaleDateString()}
+                      {new Date(list.createdAt).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex flex-wrap justify-end gap-2">
+                        <button
+                          className="rounded-md px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+                          type="button"
+                          onClick={() =>
+                            navigate('contacts', { listId: list.id })
+                          }
+                        >
+                          View contacts
+                        </button>
+                        <button
+                          className="rounded-md px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const result =
+                                await window.bulkMail.contacts.exportCsv({
+                                  listId: list.id,
+                                });
+                              if (result.ok)
+                                showToast(result.count + ' contacts exported.');
+                              else if (!result.cancelled)
+                                throw new Error(result.error);
+                            } catch (cause) {
+                              showToast(cause.message, 'error');
+                            }
+                          }}
+                        >
+                          Export
+                        </button>
                         <button
                           className="rounded-md px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
                           type="button"
@@ -283,6 +314,18 @@ export default function ContactLists({ canEdit, initialAction }) {
                         </button>
                         {canEdit && (
                           <>
+                            <button
+                              className="rounded-md px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+                              type="button"
+                              onClick={() =>
+                                navigate('contacts', {
+                                  listId: list.id,
+                                  import: true,
+                                })
+                              }
+                            >
+                              Import
+                            </button>
                             <button
                               className="rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
                               type="button"

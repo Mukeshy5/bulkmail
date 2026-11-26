@@ -163,6 +163,12 @@ function mappedContact(row, mapping) {
     city: get('city'),
     category: get('category'),
     tags: get('tags'),
+    source: get('source') || 'spreadsheet import',
+    address: get('address'),
+    customFields: get('customFields'),
+    consentSource: get('consentSource'),
+    consentAt: get('consentAt'),
+    consentEvidence: get('consentEvidence'),
     subscriptionStatus: 'pending',
   };
 }
@@ -189,6 +195,14 @@ function addActivity(database, actorUserId, importedCount, filename) {
 export async function importContacts(database, actorUserId, input) {
   const parsed = await parseFile(input);
   if (!parsed.ok) return parsed;
+  const listId =
+    typeof input.listId === 'string' && input.listId ? input.listId : null;
+  if (
+    listId &&
+    !database.prepare('SELECT 1 FROM contact_lists WHERE id = ?').get(listId)
+  ) {
+    return { ok: false, error: 'The destination list no longer exists.' };
+  }
 
   const mapping = input.mapping;
   if (
@@ -228,7 +242,7 @@ export async function importContacts(database, actorUserId, input) {
     'SELECT id FROM contacts WHERE email = ?',
   );
   const suppressedEmail = database.prepare(
-    'SELECT email FROM suppression_list WHERE email = ?',
+    'SELECT reason FROM suppression_list WHERE email = ?',
   );
 
   parsed.rows.forEach((row, index) => {
@@ -253,12 +267,13 @@ export async function importContacts(database, actorUserId, input) {
       return;
     }
     seen.add(email);
-    if (suppressedEmail.get(email)) {
+    const suppressed = suppressedEmail.get(email);
+    if (suppressed) {
       report.suppressed += 1;
       if (report.issues.length < MAX_REPORT_ISSUES) {
         report.issues.push({
           row: index + 2,
-          reason: 'Address is suppressed.',
+          reason: 'Address is suppressed (' + suppressed.reason + ').',
         });
       }
       return;
@@ -281,10 +296,12 @@ export async function importContacts(database, actorUserId, input) {
     `INSERT INTO contacts (
       id, full_name, first_name, last_name, email, company, phone, country,
       city, category, tags, subscription_status, consent_source, consent_at,
+      source, address, custom_fields, consent_evidence,
       created_at, updated_at
     ) VALUES (
       @id, @fullName, @firstName, @lastName, @email, @company, @phone,
-      @country, @city, @category, @tags, 'pending', NULL, NULL, @now, @now
+      @country, @city, @category, @tags, 'pending', @consentSource, @consentAt,
+      @source, @address, @customFields, @consentEvidence, @now, @now
     )`,
   );
   const saveReport = database.prepare(
@@ -295,13 +312,18 @@ export async function importContacts(database, actorUserId, input) {
   );
   const saveImport = database.transaction(() => {
     const now = new Date().toISOString();
+    const addMember = database.prepare(
+      'INSERT INTO contact_list_members VALUES (?, ?, ?)',
+    );
     for (const contact of eligibleContacts) {
+      const id = randomUUID();
       insert.run({
-        id: randomUUID(),
+        id,
         ...contact,
         tags: JSON.stringify(contact.tags),
         now,
       });
+      if (listId) addMember.run(listId, id, now);
     }
 
     report.imported = eligibleContacts.length;

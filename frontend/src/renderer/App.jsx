@@ -56,6 +56,24 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const signedIn = Boolean(user);
+  useEffect(() => {
+    if (!signedIn) return;
+    let active = true;
+    const timer = setInterval(() => {
+      window.bulkMail.auth
+        .currentUser()
+        .then((result) => {
+          if (active && result.ok) setUser(result.user);
+        })
+        .catch(() => {});
+    }, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [signedIn]);
+
   const handleSignOut = async () => {
     const result = await window.bulkMail.auth.logout();
     if (!result.ok) throw new Error(result.error || 'Could not sign out.');

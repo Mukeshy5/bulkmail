@@ -1,8 +1,61 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import nodemailer from 'nodemailer';
 
 const smtpEncryptions = new Set(['ssl', 'starttls', 'none']);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const oauthTokens = new Map();
+
+export function createAccountTransport(
+  account,
+  secret,
+  createTransport,
+  socketTimeout,
+) {
+  const auth = { user: account.username };
+  let cacheKey;
+  if (account.auth_type === 'google' || account.auth_type === 'microsoft') {
+    const { refreshToken, clientId, clientSecret, tenant } = JSON.parse(secret);
+    cacheKey =
+      account.id +
+      ':' +
+      createHash('sha256')
+        .update(Buffer.from(account.encrypted_password))
+        .digest('hex');
+    const token = oauthTokens.get(cacheKey);
+    Object.assign(auth, {
+      type: 'OAuth2',
+      clientId,
+      clientSecret,
+      refreshToken,
+      accessUrl:
+        account.auth_type === 'google'
+          ? 'https://oauth2.googleapis.com/token'
+          : 'https://login.microsoftonline.com/' +
+            tenant +
+            '/oauth2/v2.0/token',
+      ...(token?.expires > Date.now() + 60000 ? token : {}),
+    });
+  } else auth.pass = secret;
+  const transport = createTransport({
+    host: account.host,
+    port: account.port,
+    secure: account.encryption === 'ssl',
+    requireTLS: account.encryption === 'starttls',
+    auth,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout,
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  });
+  if (cacheKey)
+    transport.on?.('token', ({ accessToken, expires }) => {
+      for (const [key, token] of oauthTokens)
+        if (token.expires <= Date.now()) oauthTokens.delete(key);
+      oauthTokens.set(cacheKey, { accessToken, expires });
+    });
+  return transport;
+}
 
 function hasControlCharacters(value) {
   return [...value].some((character) => {
@@ -19,6 +72,7 @@ function accountFromRow(row) {
     port: row.port,
     encryption: row.encryption,
     username: row.username,
+    authType: row.auth_type,
     senderName: row.sender_name,
     senderEmail: row.sender_email,
     replyToEmail: row.reply_to_email,
@@ -49,7 +103,7 @@ function recordActivity(database, actorUserId, action, accountId, description) {
     );
 }
 
-function validateSmtpAccount(input, { passwordRequired }) {
+function validateSmtpAccount(input, { existingAuthType = null } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, error: 'Enter the SMTP account details.' };
   }
@@ -71,6 +125,16 @@ function validateSmtpAccount(input, { passwordRequired }) {
   const encryption = input.encryption;
   const port = input.port;
   const password = input.password;
+  const authType = input.authType ?? existingAuthType ?? 'password';
+  const credentialRequired = authType !== existingAuthType;
+  const clientId =
+    typeof input.oauthClientId === 'string' ? input.oauthClientId.trim() : '';
+  const clientSecret =
+    typeof input.oauthClientSecret === 'string' ? input.oauthClientSecret : '';
+  const tenant =
+    typeof input.oauthTenant === 'string' && input.oauthTenant.trim()
+      ? input.oauthTenant.trim()
+      : 'common';
 
   if (!name || name.length > 100 || hasControlCharacters(name)) {
     return {
@@ -90,15 +154,51 @@ function validateSmtpAccount(input, { passwordRequired }) {
   if (!username || username.length > 254 || hasControlCharacters(username)) {
     return { ok: false, error: 'Enter an SMTP username.' };
   }
+  if (!['password', 'google', 'microsoft'].includes(authType)) {
+    return {
+      ok: false,
+      error: 'Choose a supported SMTP authentication method.',
+    };
+  }
+  if (authType !== 'password') {
+    const hosts =
+      authType === 'google'
+        ? ['smtp.gmail.com']
+        : ['smtp-mail.outlook.com', 'smtp.office365.com'];
+    if (!hosts.includes(host.toLowerCase()) || encryption === 'none') {
+      return {
+        ok: false,
+        error:
+          'Use the provider’s SMTP host and encrypted connection for OAuth2.',
+      };
+    }
+    if (
+      (credentialRequired || password) &&
+      (!/^[a-z0-9._-]{3,400}$/i.test(clientId) ||
+        clientSecret.length > 1024 ||
+        (authType === 'google' && !clientSecret) ||
+        !/^(common|organizations|consumers|[a-f0-9-]{36})$/i.test(tenant))
+    ) {
+      return {
+        ok: false,
+        error:
+          'Enter the OAuth client ID, refresh token, and any required client secret or tenant.',
+      };
+    }
+  }
   if (
-    (passwordRequired && (typeof password !== 'string' || !password)) ||
+    (credentialRequired && (typeof password !== 'string' || !password)) ||
     (password !== undefined &&
       password !== '' &&
-      (typeof password !== 'string' || password.length > 1024))
+      (typeof password !== 'string' ||
+        password.length > (authType === 'password' ? 1024 : 4096)))
   ) {
     return {
       ok: false,
-      error: 'Enter an SMTP password up to 1024 characters long.',
+      error:
+        authType === 'password'
+          ? 'Enter an SMTP password up to 1024 characters long.'
+          : 'Provide the provider-issued OAuth refresh token.',
     };
   }
   if (
@@ -135,7 +235,16 @@ function validateSmtpAccount(input, { passwordRequired }) {
       port,
       encryption,
       username,
-      password,
+      password:
+        password && authType !== 'password'
+          ? JSON.stringify({
+              refreshToken: password,
+              clientId,
+              clientSecret,
+              tenant,
+            })
+          : password,
+      authType,
       senderName,
       senderEmail,
       replyToEmail,
@@ -160,7 +269,7 @@ export function listSmtpAccounts(database) {
 }
 
 export function createSmtpAccount(database, actorUserId, input, encryptSecret) {
-  const validated = validateSmtpAccount(input, { passwordRequired: true });
+  const validated = validateSmtpAccount(input);
   if (!validated.ok) return validated;
   if (typeof encryptSecret !== 'function') {
     throw new Error('Secure credential encryption is unavailable.');
@@ -182,11 +291,11 @@ export function createSmtpAccount(database, actorUserId, input, encryptSecret) {
         `INSERT INTO smtp_accounts (
           id, created_by, name, host, port, encryption, username,
           encrypted_password, sender_name, sender_email, reply_to_email,
-          is_enabled, is_default, created_at, updated_at
+          is_enabled, is_default, created_at, updated_at, auth_type
         ) VALUES (
           @id, @actorUserId, @name, @host, @port, @encryption, @username,
           @encryptedPassword, @senderName, @senderEmail, @replyToEmail,
-          @isEnabled, @isDefault, @now, @now
+          @isEnabled, @isDefault, @now, @now, @authType
         )`,
       )
       .run({
@@ -231,7 +340,9 @@ export function updateSmtpAccount(
   const existing = getAccount(database, id);
   if (!existing) return { ok: false, error: 'SMTP account not found.' };
 
-  const validated = validateSmtpAccount(input, { passwordRequired: false });
+  const validated = validateSmtpAccount(input, {
+    existingAuthType: existing.auth_type,
+  });
   if (!validated.ok) return validated;
   const { account } = validated;
   let encryptedPassword = existing.encrypted_password;
@@ -261,6 +372,7 @@ export function updateSmtpAccount(
           port = @port,
           encryption = @encryption,
           username = @username,
+          auth_type = @authType,
           encrypted_password = @encryptedPassword,
           sender_name = @senderName,
           sender_email = @senderEmail,
@@ -365,18 +477,22 @@ export async function testSmtpAccount(
   const password = decryptSecret(Buffer.from(account.encrypted_password));
   let transport;
   try {
-    transport = createTransport({
-      host: account.host,
-      port: account.port,
-      secure: account.encryption === 'ssl',
-      requireTLS: account.encryption === 'starttls',
-      auth: { user: account.username, pass: password },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-    });
+    transport = createAccountTransport(
+      account,
+      password,
+      createTransport,
+      15000,
+    );
     await transport.verify();
-    updateTestStatus(database, actorUserId, account, 'connected', testedAt);
+    if (
+      !updateTestStatus(database, actorUserId, account, 'connected', testedAt)
+    ) {
+      return {
+        ok: false,
+        error:
+          'The SMTP settings changed during the test. Test the updated account.',
+      };
+    }
     return { ok: true, testedAt };
   } catch (error) {
     updateTestStatus(database, actorUserId, account, 'failed', testedAt);
@@ -395,13 +511,14 @@ export async function testSmtpAccount(
 
 function updateTestStatus(database, actorUserId, account, status, testedAt) {
   const save = database.transaction(() => {
-    database
+    const updated = database
       .prepare(
         `UPDATE smtp_accounts SET
           connection_status = ?, last_tested_at = ?, updated_at = ?
-        WHERE id = ?`,
+        WHERE id = ? AND updated_at = ?`,
       )
-      .run(status, testedAt, testedAt, account.id);
+      .run(status, testedAt, testedAt, account.id, account.updated_at);
+    if (!updated.changes) return false;
     recordActivity(
       database,
       actorUserId,
@@ -409,6 +526,7 @@ function updateTestStatus(database, actorUserId, account, status, testedAt) {
       account.id,
       `SMTP connection test ${status} for "${account.name}"`,
     );
+    return true;
   });
-  save.immediate();
+  return save.immediate();
 }

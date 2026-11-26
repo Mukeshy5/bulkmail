@@ -62,7 +62,7 @@ test('CSV import previews columns and reports imported, duplicate, invalid, and 
     issues: [
       { row: 3, reason: 'Duplicate email address.' },
       { row: 4, reason: 'Enter a valid email address.' },
-      { row: 5, reason: 'Address is suppressed.' },
+      { row: 5, reason: 'Address is suppressed (unsubscribed).' },
     ],
   });
 

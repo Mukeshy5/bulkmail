@@ -1,0 +1,13 @@
+{
+  "appId": "com.bulkmail.senderpro",
+  "productName": "Bulk Mail Sender Pro",
+  "directories": { "output": "dist/installer" },
+  "win": { "target": ["nsis"], "signAndEditExecutable": false },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "artifactName": "Bulk-Mail-Sender-Pro-Setup-${version}-${arch}.${ext}",
+  "publish": null
+}

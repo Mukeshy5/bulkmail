@@ -8,11 +8,20 @@ const emptyAccount = {
   encryption: 'starttls',
   username: '',
   password: '',
+  authType: 'password',
+  oauthClientId: '',
+  oauthClientSecret: '',
+  oauthTenant: '',
   senderName: '',
   senderEmail: '',
   replyToEmail: '',
   isEnabled: true,
   isDefault: false,
+};
+const presets = {
+  gmail: { host: 'smtp.gmail.com', authType: 'google' },
+  outlook: { host: 'smtp-mail.outlook.com', authType: 'microsoft' },
+  office: { host: 'smtp.office365.com', authType: 'microsoft' },
 };
 
 export default function SmtpAccounts({ canManage }) {
@@ -307,6 +316,7 @@ function SmtpAccountForm({ account, onClose, onSaved }) {
           port: String(account.port),
           encryption: account.encryption,
           username: account.username,
+          authType: account.authType || 'password',
           senderName: account.senderName,
           senderEmail: account.senderEmail,
           replyToEmail: account.replyToEmail,
@@ -357,6 +367,8 @@ function SmtpAccountForm({ account, onClose, onSaved }) {
 
   const inputClass =
     'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100';
+  const oauth = form.authType !== 'password';
+  const requiresCredential = !account || form.authType !== account.authType;
 
   return (
     <Modal
@@ -367,6 +379,33 @@ function SmtpAccountForm({ account, onClose, onSaved }) {
     >
       <form className="mt-5" onSubmit={submit}>
         <div className="grid gap-4 sm:grid-cols-2">
+          {!account && (
+            <label className="text-sm font-medium text-slate-700 sm:col-span-2">
+              Provider preset
+              <select
+                className={inputClass + ' bg-white'}
+                defaultValue="custom"
+                onChange={(event) => {
+                  const preset = presets[event.target.value] || {
+                    host: '',
+                    authType: 'password',
+                  };
+                  setForm((current) => ({
+                    ...current,
+                    ...preset,
+                    port: '587',
+                    encryption: 'starttls',
+                    password: '',
+                  }));
+                }}
+              >
+                <option value="custom">Custom or hosting SMTP</option>
+                <option value="gmail">Gmail</option>
+                <option value="outlook">Outlook.com</option>
+                <option value="office">Microsoft 365</option>
+              </select>
+            </label>
+          )}
           <label className="text-sm font-medium text-slate-700">
             Account name
             <input
@@ -429,23 +468,83 @@ function SmtpAccountForm({ account, onClose, onSaved }) {
             />
           </label>
           <label className="text-sm font-medium text-slate-700">
-            {account
-              ? 'Replace password (optional)'
-              : 'Password / app password'}
+            Authentication
+            <select
+              className={inputClass + ' bg-white'}
+              name="authType"
+              value={form.authType}
+              onChange={update}
+            >
+              <option value="password">Password or app password</option>
+              <option value="google">Google OAuth2</option>
+              <option value="microsoft">Microsoft OAuth2</option>
+            </select>
+          </label>
+          <label className="text-sm font-medium text-slate-700">
+            {oauth ? 'OAuth refresh token' : 'Password or app password'}
             <input
               className={inputClass}
               name="password"
               type="password"
-              maxLength={1024}
-              required={!account}
+              maxLength={oauth ? 4096 : 1024}
+              required={requiresCredential}
               autoComplete="new-password"
               placeholder={
-                account ? 'Leave blank to keep the saved password' : ''
+                account && !requiresCredential
+                  ? 'Leave blank to keep the saved credentials'
+                  : ''
               }
               value={form.password}
               onChange={update}
             />
           </label>
+          {oauth && (
+            <>
+              <p className="text-sm text-slate-500 sm:col-span-2">
+                Use a refresh token issued for SMTP access. Enter the client
+                information when adding or replacing the token.
+              </p>
+              <label className="text-sm font-medium text-slate-700">
+                OAuth client ID
+                <input
+                  className={inputClass}
+                  name="oauthClientId"
+                  maxLength={400}
+                  required={requiresCredential || Boolean(form.password)}
+                  value={form.oauthClientId}
+                  onChange={update}
+                />
+              </label>
+              <label className="text-sm font-medium text-slate-700">
+                OAuth client secret
+                <input
+                  className={inputClass}
+                  type="password"
+                  name="oauthClientSecret"
+                  maxLength={1024}
+                  required={
+                    form.authType === 'google' &&
+                    (requiresCredential || Boolean(form.password))
+                  }
+                  value={form.oauthClientSecret}
+                  onChange={update}
+                />
+              </label>
+              {form.authType === 'microsoft' && (
+                <label className="text-sm font-medium text-slate-700">
+                  Microsoft tenant
+                  <input
+                    className={inputClass}
+                    name="oauthTenant"
+                    placeholder="common"
+                    maxLength={36}
+                    value={form.oauthTenant}
+                    onChange={update}
+                  />
+                </label>
+              )}
+            </>
+          )}
           <label className="text-sm font-medium text-slate-700">
             Sender name
             <input

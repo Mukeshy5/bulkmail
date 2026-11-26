@@ -7,6 +7,7 @@ import {
   useToast,
   formatDate,
 } from './ui.jsx';
+import { Action, ErrorText, Field } from './workspace-ui.jsx';
 
 const pageSize = 50;
 const statusOptions = [
@@ -27,14 +28,26 @@ const importFields = [
   ['city', 'City'],
   ['category', 'Category'],
   ['tags', 'Tags'],
+  ['address', 'Address'],
+  ['source', 'Contact Source'],
+  ['customFields', 'Custom Fields (JSON)'],
+  ['consentSource', 'Consent Source'],
+  ['consentAt', 'Consent Date'],
+  ['consentEvidence', 'Consent Evidence'],
 ];
 
 export default function Contacts({ canEdit, initialAction }) {
   const [contacts, setContacts] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [search, setSearch] = useState(initialAction?.search || '');
+  const [appliedSearch, setAppliedSearch] = useState(
+    initialAction?.search || '',
+  );
+  const [listId, setListId] = useState(initialAction?.listId || '');
+  const [lists, setLists] = useState([]);
+  const [transfer, setTransfer] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState('');
   const [status, setStatus] = useState('all');
   const [appliedStatus, setAppliedStatus] = useState('all');
   const [sortBy, setSortBy] = useState('added');
@@ -59,6 +72,7 @@ export default function Contacts({ canEdit, initialAction }) {
         sortOrder,
         page,
         pageSize,
+        listId,
       })
       .then((result) => {
         if (!result.ok) throw new Error(result.error);
@@ -81,12 +95,26 @@ export default function Contacts({ canEdit, initialAction }) {
     return () => {
       active = false;
     };
-  }, [appliedSearch, appliedStatus, sortBy, sortOrder, page, reload]);
+  }, [appliedSearch, appliedStatus, sortBy, sortOrder, page, reload, listId]);
+
+  useEffect(() => {
+    let active = true;
+    window.bulkMail.contactLists
+      .list('')
+      .then((result) => {
+        if (active && result.ok) setLists(result.lists);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!canEdit) return;
     if (initialAction === 'add') setContactToEdit({});
-    if (initialAction === 'import') setShowImport(true);
+    if (initialAction === 'import' || initialAction?.import)
+      setShowImport(true);
   }, [canEdit, initialAction]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -138,6 +166,7 @@ export default function Contacts({ canEdit, initialAction }) {
       const result = await window.bulkMail.contacts.exportCsv({
         search: appliedSearch,
         status: appliedStatus,
+        listId,
       });
       if (result.cancelled) return;
       if (!result.ok) {
@@ -264,7 +293,7 @@ export default function Contacts({ canEdit, initialAction }) {
                   type="button"
                   onClick={() => setShowImport(true)}
                 >
-                  Import CSV / XLSX
+                  Import contacts
                 </button>
                 <button
                   className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
@@ -315,6 +344,23 @@ export default function Contacts({ canEdit, initialAction }) {
               ))}
             </select>
           </label>
+          <Field label="Contact list">
+            <select
+              value={listId}
+              onChange={(event) => {
+                setListId(event.target.value);
+                setPage(1);
+                setSelectedIds(new Set());
+              }}
+            >
+              <option value="">All lists</option>
+              {lists.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
           <button
             className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             type="submit"
@@ -328,6 +374,57 @@ export default function Contacts({ canEdit, initialAction }) {
             <span className="text-sm font-medium text-indigo-900">
               {selectedIds.size} selected
             </span>
+            <Action onClick={() => setTransfer(true)} disabled={!lists.length}>
+              {listId ? 'Copy or move to list' : 'Copy to list'}
+            </Action>
+            <Field label="Update subscription status">
+              <select
+                value={bulkStatus}
+                onChange={(event) => setBulkStatus(event.target.value)}
+              >
+                <option value="">Select status</option>
+                {statusOptions
+                  .filter(([state]) => state !== 'bounced')
+                  .map(([state, label]) => (
+                    <option key={state} value={state}>
+                      {label}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <Action
+              disabled={!bulkStatus}
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    'Update the subscription status for ' +
+                      selectedIds.size +
+                      ' contacts?',
+                  )
+                )
+                  return;
+                try {
+                  const result = await window.bulkMail.contacts.bulkStatus({
+                    ids: [...selectedIds],
+                    status: bulkStatus,
+                  });
+                  if (!result.ok) throw new Error(result.error);
+                  showToast(
+                    result.changed +
+                      ' updated · ' +
+                      result.skipped +
+                      ' ineligible or missing.',
+                  );
+                  setSelectedIds(new Set());
+                  setBulkStatus('');
+                  setReload((value) => value + 1);
+                } catch (cause) {
+                  showToast(cause.message, 'error');
+                }
+              }}
+            >
+              Update selected
+            </Action>
             <button
               className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-50"
               type="button"
@@ -543,9 +640,9 @@ export default function Contacts({ canEdit, initialAction }) {
       )}
       {showImport && canEdit && (
         <ImportContacts
+          listId={listId}
           onClose={() => setShowImport(false)}
           onImported={(report) => {
-            setShowImport(false);
             showToast(
               `Import: ${report.imported} added, ${report.duplicates} duplicates, ${report.invalid} invalid, ${report.suppressed} suppressed.`,
             );
@@ -553,7 +650,87 @@ export default function Contacts({ canEdit, initialAction }) {
           }}
         />
       )}
+      {transfer && (
+        <TransferContacts
+          ids={[...selectedIds]}
+          source={listId}
+          lists={lists}
+          onClose={() => setTransfer(false)}
+          onSaved={() => {
+            setTransfer(false);
+            setSelectedIds(new Set());
+            setReload(reload + 1);
+            showToast('List membership updated.');
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function TransferContacts({ ids, source, lists, onClose, onSaved }) {
+  const [destination, setDestination] = useState('');
+  const [move, setMove] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title="Transfer contacts" onClose={onClose}>
+      <form
+        className="studio-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setError('');
+          setBusy(true);
+          try {
+            const result = await window.bulkMail.contactLists.transfer({
+              ids,
+              destination,
+              source,
+              move,
+            });
+            if (!result.ok) throw new Error(result.error);
+            onSaved();
+          } catch (cause) {
+            setError(cause.message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <Field label="Destination list">
+          <select
+            required
+            value={destination}
+            onChange={(event) => setDestination(event.target.value)}
+          >
+            <option value="">Select a list</option>
+            {lists
+              .filter((row) => row.id !== source)
+              .map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+          </select>
+        </Field>
+        {source && (
+          <label className="studio-check">
+            <input
+              type="checkbox"
+              checked={move}
+              onChange={(event) => setMove(event.target.checked)}
+            />
+            Remove from the current list after copying
+          </label>
+        )}
+        <ErrorText text={error} />
+        <div className="studio-actions studio-wide">
+          <Action primary type="submit" disabled={busy}>
+            {move ? 'Move' : 'Copy'} {ids.length} contacts
+          </Action>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -585,6 +762,12 @@ function ContactEditor({ contact, onClose, onSaved }) {
     country: contact?.country || '',
     city: contact?.city || '',
     category: contact?.category || '',
+    source: contact?.source || '',
+    address: contact?.address || '',
+    consentEvidence: contact?.consentEvidence || '',
+    customFields: contact?.customFields
+      ? JSON.stringify(contact.customFields)
+      : '',
     tags: contact?.tags?.join(', ') || '',
     subscriptionStatus: contact?.subscriptionStatus || 'pending',
     consentSource: contact?.consentSource || '',
@@ -633,6 +816,8 @@ function ContactEditor({ contact, onClose, onSaved }) {
     ['country', 'Country'],
     ['city', 'City'],
     ['category', 'Category'],
+    ['source', 'Contact source'],
+    ['address', 'Address'],
     ['tags', 'Tags (comma-separated)'],
   ];
 
@@ -693,13 +878,26 @@ function ContactEditor({ contact, onClose, onSaved }) {
                       ? 150
                       : name === 'tags'
                         ? 1600
-                        : 100
+                        : name === 'address'
+                          ? 500
+                          : name === 'source'
+                            ? 150
+                            : 100
                 }
                 value={form[name]}
                 onChange={update}
               />
             </label>
           ))}
+          <Field label="Custom fields (JSON)" wide>
+            <textarea
+              className={inputClass}
+              rows={3}
+              name="customFields"
+              value={form.customFields}
+              onChange={update}
+            />
+          </Field>
           <label className="text-sm font-medium text-slate-700 sm:col-span-2">
             Subscription status
             <select
@@ -729,6 +927,15 @@ function ContactEditor({ contact, onClose, onSaved }) {
                   onChange={update}
                 />
               </label>
+              <Field wide label="Consent evidence">
+                <textarea
+                  className={inputClass}
+                  name="consentEvidence"
+                  maxLength={1000}
+                  value={form.consentEvidence}
+                  onChange={update}
+                />
+              </Field>
               <label className="text-sm font-medium text-slate-700">
                 Consent date
                 <input
@@ -781,9 +988,18 @@ function ContactDetails({ contact, onClose }) {
     ['Country', contact.country],
     ['City', contact.city],
     ['Category', contact.category],
+    ['Contact source', contact.source],
+    ['Address', contact.address],
+    [
+      'Custom fields',
+      Object.entries(contact.customFields || {})
+        .map(([key, value]) => key + ' = ' + value)
+        .join(', '),
+    ],
     ['Tags', contact.tags.join(', ')],
     ['Status', contact.subscriptionStatus],
     ['Consent source', contact.consentSource],
+    ['Consent evidence', contact.consentEvidence],
     ['Consent recorded', formatDate(contact.consentAt)],
     ['Date added', formatDate(contact.createdAt)],
     ['Last updated', formatDate(contact.updatedAt)],
@@ -821,25 +1037,33 @@ function ContactDetails({ contact, onClose }) {
   );
 }
 
-function ImportContacts({ onClose, onImported }) {
+function ImportContacts({ onClose, onImported, listId }) {
   const [preview, setPreview] = useState(null);
   const [mapping, setMapping] = useState({});
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [fileData, setFileData] = useState(null);
+  const [manual, setManual] = useState('');
+  const [summary, setSummary] = useState(null);
 
   async function chooseFile(event) {
     const file = event.target.files?.[0];
+    if (!file) return;
+    await chooseInput({
+      fileName: file.name,
+      fileData: new Uint8Array(await file.arrayBuffer()),
+    });
+  }
+
+  async function chooseInput(input) {
     setPreview(null);
     setFileData(null);
     setMapping({});
-    if (!file) return;
+    setSummary(null);
 
     setBusy(true);
     setMessage('Reading file and checking its columns…');
     try {
-      const data = new Uint8Array(await file.arrayBuffer());
-      const input = { fileName: file.name, fileData: data };
       const result = await window.bulkMail.contacts.previewImport(input);
       if (!result.ok) {
         setMessage(result.error);
@@ -873,11 +1097,15 @@ function ImportContacts({ onClose, onImported }) {
       const result = await window.bulkMail.contacts.import({
         ...fileData,
         mapping,
+        listId,
       });
       if (!result.ok) {
         setMessage(result.error);
         return;
       }
+      setSummary(result.report);
+      setPreview(null);
+      setMessage('');
       onImported(result.report);
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'The import failed.');
@@ -906,9 +1134,49 @@ function ImportContacts({ onClose, onImported }) {
           onChange={chooseFile}
         />
       </label>
+      <div className="mt-4 space-y-2">
+        <Field label="Or paste CSV with column headings">
+          <textarea
+            rows={3}
+            placeholder="Full Name,Email"
+            value={manual}
+            onChange={(event) => setManual(event.target.value)}
+          />
+        </Field>
+        <Action
+          disabled={busy || !manual.trim()}
+          onClick={() =>
+            chooseInput({
+              fileName: 'manual.csv',
+              fileData: new TextEncoder().encode(manual),
+            })
+          }
+        >
+          Preview pasted CSV
+        </Action>
+      </div>
       <p className="mt-3 min-h-5 text-sm text-slate-500" role="status">
         {message}
       </p>
+      {summary && (
+        <section className="studio-card">
+          <h2>Import summary</h2>
+          <p>
+            {summary.imported} added as pending · {summary.duplicates}{' '}
+            duplicates · {summary.invalid} invalid · {summary.suppressed}{' '}
+            suppressed
+          </p>
+          {summary.issues.length > 0 && (
+            <ul className="list-disc pl-5 text-sm">
+              {summary.issues.map((issue) => (
+                <li key={issue.row}>
+                  Row {issue.row} · {issue.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {preview && (
         <>
           <p className="mt-2 text-sm font-medium text-slate-700">
@@ -1005,6 +1273,12 @@ function suggestHeader(field, headers) {
     city: ['city'],
     category: ['category'],
     tags: ['tags', 'tag'],
+    address: ['address', 'streetaddress'],
+    source: ['source', 'contactsource'],
+    customFields: ['customfields', 'customfieldsjson'],
+    consentSource: ['consentsource'],
+    consentAt: ['consentdate', 'consentat'],
+    consentEvidence: ['consentevidence'],
   };
   return (
     headers.find((header) =>

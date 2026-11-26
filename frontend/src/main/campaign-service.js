@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { campaignAudience } from './audience-service.js';
 
 const campaignTypes = new Set([
   'marketing',
@@ -17,7 +18,8 @@ function hasHeaderControls(value) {
   });
 }
 
-function campaignFromRow(row) {
+function campaignFromRow(database, row) {
+  const status = row.status === 'processing' ? 'queued' : row.status;
   return {
     id: row.id,
     name: row.name,
@@ -33,7 +35,12 @@ function campaignFromRow(row) {
     templateName: row.template_name,
     smtpAccountId: row.smtp_account_id,
     smtpAccountName: row.smtp_account_name,
-    status: row.status,
+    status,
+    ...campaignAudience(database, row.id),
+    previewText: row.preview_text,
+    customHtml: row.custom_html,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
     scheduledAt: row.scheduled_at,
     timezone: row.timezone,
     createdAt: row.created_at,
@@ -97,6 +104,51 @@ function validateDraft(database, input) {
     (input.smtpAccountId != null && typeof input.smtpAccountId !== 'string')
   ) {
     return { ok: false, error: 'Select valid campaign settings.' };
+  }
+  const listIds = input.listIds ?? (recipientListId ? [recipientListId] : []);
+  const segmentId = input.segmentId || null;
+  const exclusions = input.exclusions ?? [];
+  const previewText =
+    typeof input.previewText === 'string' ? input.previewText.trim() : '';
+  const customHtml =
+    typeof input.customHtml === 'string' ? input.customHtml.trim() : '';
+  if (
+    !Array.isArray(listIds) ||
+    listIds.length > 200 ||
+    !listIds.every(
+      (id) =>
+        typeof id === 'string' &&
+        database.prepare('SELECT 1 FROM contact_lists WHERE id = ?').get(id),
+    )
+  ) {
+    return { ok: false, error: 'Choose existing recipient lists.' };
+  }
+  if (
+    segmentId &&
+    (typeof segmentId !== 'string' ||
+      !database
+        .prepare('SELECT 1 FROM contact_segments WHERE id = ?')
+        .get(segmentId))
+  ) {
+    return { ok: false, error: 'Select an existing segment.' };
+  }
+  if (
+    !Array.isArray(exclusions) ||
+    exclusions.length > 500 ||
+    !exclusions.every(
+      (email) =>
+        typeof email === 'string' &&
+        email.length <= 254 &&
+        emailPattern.test(email),
+    ) ||
+    previewText.length > 250 ||
+    hasHeaderControls(previewText) ||
+    customHtml.length > 500000
+  ) {
+    return {
+      ok: false,
+      error: 'Check the excluded emails, preview text, and HTML size.',
+    };
   }
 
   if (!name || name.length > 150 || hasHeaderControls(name)) {
@@ -164,7 +216,12 @@ function validateDraft(database, input) {
       senderName,
       senderEmail,
       replyToEmail,
-      recipientListId,
+      recipientListId: listIds[0] ?? null,
+      listIds: [...new Set(listIds)],
+      segmentId,
+      exclusions: JSON.stringify(exclusions),
+      previewText,
+      customHtml,
       templateId,
       smtpAccountId,
     },
@@ -190,7 +247,10 @@ export function listCampaigns(database, search = '') {
        ORDER BY campaigns.updated_at DESC`,
     )
     .all(term, `%${term}%`, `%${term}%`);
-  return { ok: true, campaigns: rows.map(campaignFromRow) };
+  return {
+    ok: true,
+    campaigns: rows.map((row) => campaignFromRow(database, row)),
+  };
 }
 
 export function getCampaign(database, id) {
@@ -198,7 +258,7 @@ export function getCampaign(database, id) {
     .prepare(`${campaignSelect} WHERE campaigns.id = ?`)
     .get(id);
   return row
-    ? { ok: true, campaign: campaignFromRow(row) }
+    ? { ok: true, campaign: campaignFromRow(database, row) }
     : { ok: false, error: 'Campaign not found.' };
 }
 
@@ -214,14 +274,15 @@ export function createCampaignDraft(database, actorUserId, input) {
         `INSERT INTO campaigns (
           id, created_by, name, description, campaign_type, subject,
           sender_name, sender_email, reply_to_email, recipient_list_id,
-          template_id, smtp_account_id, status, created_at, updated_at
+          template_id, smtp_account_id, segment_id, exclusions, preview_text, custom_html, status, created_at, updated_at
         ) VALUES (
           @id, @actorUserId, @name, @description, @campaignType, @subject,
           @senderName, @senderEmail, @replyToEmail, @recipientListId,
-          @templateId, @smtpAccountId, 'draft', @now, @now
+          @templateId, @smtpAccountId, @segmentId, @exclusions, @previewText, @customHtml, 'draft', @now, @now
         )`,
       )
       .run({ id, actorUserId, ...campaign, now });
+    saveLists(database, id, campaign.listIds);
     recordActivity(
       database,
       actorUserId,
@@ -259,11 +320,16 @@ export function updateCampaignDraft(database, actorUserId, id, input) {
           recipient_list_id = @recipientListId,
           template_id = @templateId,
           smtp_account_id = @smtpAccountId,
+          segment_id = @segmentId,
+          exclusions = @exclusions,
+          preview_text = @previewText,
+          custom_html = @customHtml,
           updated_at = @now
         WHERE id = @id AND status = 'draft'`,
       )
       .run({ id, ...campaign, now: new Date().toISOString() });
     if (!result.changes) return false;
+    saveLists(database, id, campaign.listIds);
     recordActivity(
       database,
       actorUserId,
@@ -293,9 +359,18 @@ export function duplicateCampaignDraft(database, actorUserId, id) {
     senderEmail: source.sender_email,
     replyToEmail: source.reply_to_email,
     recipientListId: source.recipient_list_id,
+    ...campaignAudience(database, id),
+    previewText: source.preview_text,
+    customHtml: source.custom_html,
     templateId: source.template_id,
     smtpAccountId: source.smtp_account_id,
   });
+}
+
+function saveLists(database, id, listIds) {
+  database.prepare('DELETE FROM campaign_lists WHERE campaign_id = ?').run(id);
+  const insert = database.prepare('INSERT INTO campaign_lists VALUES (?, ?)');
+  for (const listId of listIds) insert.run(id, listId);
 }
 
 export function deleteCampaignDraft(database, actorUserId, id) {

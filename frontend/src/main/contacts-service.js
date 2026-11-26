@@ -30,6 +30,10 @@ function contactFromRow(row) {
     country: row.country,
     city: row.city,
     category: row.category,
+    source: row.source,
+    address: row.address,
+    consentEvidence: row.consent_evidence,
+    customFields: JSON.parse(row.custom_fields),
     tags: JSON.parse(row.tags),
     subscriptionStatus: row.subscription_status,
     consentSource: row.consent_source,
@@ -106,7 +110,12 @@ export function validateContact(input) {
   if (!fullName || fullName.length > 150) {
     return { ok: false, error: 'Enter a contact name (up to 150 characters).' };
   }
-  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+  if (
+    email.length > 254 ||
+    !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9-]+\.)+[a-z0-9-]{2,}$/i.test(
+      email,
+    )
+  ) {
     return { ok: false, error: 'Enter a valid email address.' };
   }
   if (!subscriptionStatuses.has(subscriptionStatus)) {
@@ -147,6 +156,9 @@ export function validateContact(input) {
     ['country', 100],
     ['city', 100],
     ['category', 100],
+    ['source', 150],
+    ['address', 500],
+    ['consentEvidence', 1000],
   ];
   const contact = {
     fullName,
@@ -169,6 +181,36 @@ export function validateContact(input) {
     }
     contact[field] = value;
   }
+  let customFields = input.customFields || {};
+  if (typeof customFields === 'string') {
+    try {
+      customFields = JSON.parse(customFields);
+    } catch {
+      return {
+        ok: false,
+        error: 'Enter custom fields as a JSON object, such as {"plan":"Gold"}.',
+      };
+    }
+  }
+  if (
+    !customFields ||
+    typeof customFields !== 'object' ||
+    Array.isArray(customFields) ||
+    Object.keys(customFields).length > 30 ||
+    !Object.entries(customFields).every(
+      ([key, value]) =>
+        /^[a-zA-Z0-9_-]{1,40}$/.test(key) &&
+        typeof value === 'string' &&
+        value.length <= 200,
+    )
+  ) {
+    return {
+      ok: false,
+      error:
+        'Use up to 30 custom fields with short keys and text values up to 200 characters.',
+    };
+  }
+  contact.customFields = JSON.stringify(customFields);
 
   return { ok: true, contact };
 }
@@ -213,11 +255,12 @@ export function createContact(database, actorUserId, input) {
           `INSERT INTO contacts (
             id, full_name, first_name, last_name, email, company, phone, country,
             city, category, tags, subscription_status, consent_source, consent_at,
+            source, address, consent_evidence, custom_fields,
             created_at, updated_at
           ) VALUES (
             @id, @fullName, @firstName, @lastName, @email, @company, @phone,
             @country, @city, @category, @tags, @subscriptionStatus, @consentSource,
-            @consentAt, @createdAt, @updatedAt
+            @consentAt, @source, @address, @consentEvidence, @customFields, @createdAt, @updatedAt
           )`,
         )
         .run({
@@ -249,13 +292,34 @@ export function createContact(database, actorUserId, input) {
 
 export function updateContact(database, actorUserId, id, input) {
   const current = database
-    .prepare('SELECT id FROM contacts WHERE id = ?')
+    .prepare('SELECT * FROM contacts WHERE id = ?')
     .get(id);
   if (!current) return { ok: false, error: 'Contact not found.' };
 
   const validated = validateContact(input);
   if (!validated.ok) return validated;
   const { contact } = validated;
+  if (
+    contact.email !== current.email &&
+    contact.subscriptionStatus === 'subscribed' &&
+    current.consent_at &&
+    contact.consentAt.slice(0, 10) === current.consent_at.slice(0, 10) &&
+    contact.consentSource === current.consent_source &&
+    contact.consentEvidence === current.consent_evidence
+  ) {
+    return {
+      ok: false,
+      error:
+        'Record new consent for the new address or set the contact to pending.',
+    };
+  }
+  if (
+    contact.email === current.email &&
+    contact.consentAt &&
+    current.consent_at &&
+    contact.consentAt.slice(0, 10) === current.consent_at.slice(0, 10)
+  )
+    contact.consentAt = current.consent_at;
   if (
     contact.subscriptionStatus === 'subscribed' &&
     isSuppressed(database, contact.email)
@@ -285,6 +349,10 @@ export function updateContact(database, actorUserId, id, input) {
             subscription_status = @subscriptionStatus,
             consent_source = @consentSource,
             consent_at = @consentAt,
+            source = @source,
+            address = @address,
+            consent_evidence = @consentEvidence,
+            custom_fields = @customFields,
             updated_at = @updatedAt
           WHERE id = @id`,
         )
@@ -334,6 +402,12 @@ function contactFilters(filters = {}) {
     }
     clauses.push('subscription_status = ?');
     values.push(status);
+  }
+  if (typeof filters.listId === 'string' && filters.listId) {
+    clauses.push(
+      'EXISTS (SELECT 1 FROM contact_list_members m WHERE m.contact_id = contacts.id AND m.list_id = ?)',
+    );
+    values.push(filters.listId);
   }
 
   return {
@@ -523,7 +597,8 @@ export function listContactLists(database, search = '') {
         lists.id, lists.name, lists.description,
         lists.created_at AS createdAt, lists.updated_at AS updatedAt,
         COUNT(members.contact_id) AS contactCount,
-        SUM(contacts.subscription_status = 'subscribed') AS subscribedCount
+        SUM(contacts.subscription_status = 'subscribed') AS subscribedCount,
+        SUM(contacts.subscription_status = 'unsubscribed') AS unsubscribedCount
       FROM contact_lists AS lists
       LEFT JOIN contact_list_members AS members ON members.list_id = lists.id
       LEFT JOIN contacts ON contacts.id = members.contact_id
@@ -542,6 +617,7 @@ export function listContactLists(database, search = '') {
     lists: rows.map((row) => ({
       ...row,
       subscribedCount: row.subscribedCount || 0,
+      unsubscribedCount: row.unsubscribedCount || 0,
     })),
   };
 }
@@ -736,6 +812,7 @@ export function exportContactsCsv(database, filters = {}) {
     .prepare(
       `SELECT full_name, first_name, last_name, email, company, phone, country,
         city, category, tags, subscription_status, consent_source, consent_at,
+        source, address, consent_evidence, custom_fields,
         created_at, updated_at
        FROM contacts ${filtered.where}
        ORDER BY created_at DESC`,
@@ -751,10 +828,14 @@ export function exportContactsCsv(database, filters = {}) {
     ['Country', 'country'],
     ['City', 'city'],
     ['Category', 'category'],
+    ['Source', 'source'],
+    ['Address', 'address'],
+    ['Custom Fields', 'custom_fields'],
     ['Tags', 'tags'],
     ['Subscription Status', 'subscription_status'],
     ['Consent Source', 'consent_source'],
     ['Consent Date', 'consent_at'],
+    ['Consent Evidence', 'consent_evidence'],
     ['Date Added', 'created_at'],
     ['Last Updated', 'updated_at'],
   ];
@@ -777,4 +858,101 @@ export function exportContactsCsv(database, filters = {}) {
   ].join('\r\n');
 
   return { ok: true, csv, count: rows.length };
+}
+
+export function transferContacts(
+  database,
+  actor,
+  { ids, destination, source, move = false } = {},
+) {
+  if (
+    !Array.isArray(ids) ||
+    !ids.length ||
+    ids.length > 1000 ||
+    !ids.every((id) => typeof id === 'string') ||
+    typeof destination !== 'string' ||
+    (move && (typeof source !== 'string' || source === destination))
+  ) {
+    return {
+      ok: false,
+      error: 'Choose contacts and a valid destination list.',
+    };
+  }
+  return database
+    .transaction(() => {
+      const exists = database.prepare(
+        'SELECT 1 FROM contact_lists WHERE id = ?',
+      );
+      if (!exists.get(destination) || (move && !exists.get(source)))
+        return { ok: false, error: 'List not found.' };
+      const add = database.prepare(
+        'INSERT OR IGNORE INTO contact_list_members SELECT ?, id, ? FROM contacts WHERE id = ?',
+      );
+      const remove = database.prepare(
+        'DELETE FROM contact_list_members WHERE list_id = ? AND contact_id = ?',
+      );
+      const now = new Date().toISOString();
+      for (const id of new Set(ids)) {
+        if (move && !remove.run(source, id).changes) continue;
+        add.run(destination, now, id);
+      }
+      recordActivity(
+        database,
+        actor,
+        move ? 'contacts.moved' : 'contacts.copied',
+        'contact_list',
+        destination,
+        'List membership updated.',
+      );
+      return { ok: true };
+    })
+    .immediate();
+}
+
+export function updateContactStatuses(database, actor, { ids, status } = {}) {
+  if (
+    !Array.isArray(ids) ||
+    !ids.length ||
+    ids.length > 1000 ||
+    !ids.every((id) => typeof id === 'string') ||
+    !['subscribed', 'pending', 'unsubscribed', 'blocked'].includes(status)
+  ) {
+    return { ok: false, error: 'Choose contacts and a supported status.' };
+  }
+  return database
+    .transaction(() => {
+      const select = database.prepare(
+        'SELECT email, consent_source, consent_at FROM contacts WHERE id = ?',
+      );
+      const update = database.prepare(
+        'UPDATE contacts SET subscription_status = ?, updated_at = ? WHERE id = ?',
+      );
+      let changed = 0;
+      let skipped = 0;
+      const now = new Date().toISOString();
+      for (const id of new Set(ids)) {
+        const row = select.get(id);
+        if (
+          !row ||
+          (status === 'subscribed' &&
+            (!row.consent_source ||
+              !row.consent_at ||
+              isSuppressed(database, row.email)))
+        ) {
+          skipped += 1;
+          continue;
+        }
+        changed += update.run(status, now, id).changes;
+      }
+      recordActivity(
+        database,
+        actor,
+        'contacts.status_updated',
+        'contact',
+        null,
+        changed + ' contact statuses updated.',
+      );
+      return { ok: true, changed, skipped };
+    })
+    .immediate();
 }

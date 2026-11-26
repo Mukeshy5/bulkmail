@@ -1,5 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron';
-import { writeFile } from 'node:fs/promises';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  safeStorage,
+  Notification,
+} from 'electron';
+import { writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
@@ -17,6 +24,8 @@ import {
   listContactLists,
   listContacts,
   replaceContactListMembers,
+  transferContacts,
+  updateContactStatuses,
   updateContact,
   updateContactList,
 } from './main/contacts-service.js';
@@ -49,22 +58,36 @@ import {
 } from './main/email-template-service.js';
 import { loginUser, registerUser } from './main/auth-service.js';
 import { openUserDatabase } from './main/database.js';
+import {
+  getUser,
+  needsSetup,
+  newSession,
+  revokeSession,
+  sessionUser,
+} from './main/admin-service.js';
+import { createDeliveryWorker } from './main/delivery-service.js';
+import { registerWorkspaceIpc } from './main/workspace-ipc.js';
+import { automaticBackup } from './main/backup-service.js';
+import { notify, settings } from './main/operations.js';
 
-const contactEditorRoles = new Set([
-  'super_admin',
-  'administrator',
-  'marketing_manager',
-  'campaign_operator',
-]);
-const smtpAdminRoles = new Set(['super_admin', 'administrator']);
-
-if (started) {
+const explicitProfile = app.commandLine.getSwitchValue('user-data-dir');
+if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
+const ownsWorkspace = !started && app.requestSingleInstanceLock();
+if (!ownsWorkspace) {
   app.quit();
 }
 
 let mainWindow;
 let database;
+let worker;
+let maintenance;
+let maintenanceWork;
+let quitting = false;
+let restored = false;
+let restoring = false;
 const authenticatedUsers = new Map();
+const rememberedSessionFile = () =>
+  path.join(app.getPath('userData'), 'session.bin');
 
 const assertTrustedRenderer = (event) => {
   if (
@@ -75,32 +98,28 @@ const assertTrustedRenderer = (event) => {
       'Untrusted renderer attempted to access the application API.',
     );
   }
+  if (restoring) throw new Error('The workspace is restoring a backup.');
 };
 
 const getAuthenticatedUser = (event) => {
   assertTrustedRenderer(event);
-  const user = authenticatedUsers.get(event.sender.id);
+  const user = sessionUser(database, authenticatedUsers.get(event.sender.id));
   if (!user) {
     throw new Error('Sign in before using the workspace.');
   }
   return user;
 };
 
-const requireContactEditor = (event) => {
+const authorize = (event, permission) => {
   const user = getAuthenticatedUser(event);
-  if (!contactEditorRoles.has(user.role)) {
-    throw new Error('Your account has read-only access.');
+  if (!user.permissions.includes(permission)) {
+    throw new Error('Your role does not have permission for this action.');
   }
   return user;
 };
 
-const requireSmtpAdmin = (event) => {
-  const user = getAuthenticatedUser(event);
-  if (!smtpAdminRoles.has(user.role)) {
-    throw new Error('Only administrators can manage SMTP accounts.');
-  }
-  return user;
-};
+const requireContactEditor = (event) => authorize(event, 'workspace.edit');
+const requireSmtpAdmin = (event) => authorize(event, 'workspace.admin');
 
 const encryptSmtpSecret = (secret) => {
   if (!safeStorage.isEncryptionAvailable()) {
@@ -123,29 +142,67 @@ const decryptSmtpSecret = (encryptedSecret) => {
 const registerIpcHandlers = () => {
   ipcMain.handle('auth:register', async (event, input) => {
     assertTrustedRenderer(event);
-    return registerUser(database, input);
+    return registerUser(database, input, { setupOnly: true });
+  });
+
+  ipcMain.handle('auth:needs-setup', (event) => {
+    assertTrustedRenderer(event);
+    return { ok: true, needsSetup: needsSetup(database) };
   });
 
   ipcMain.handle('auth:login', async (event, input) => {
     assertTrustedRenderer(event);
     const result = await loginUser(database, input);
     if (result.ok) {
-      authenticatedUsers.set(event.sender.id, result.user);
+      const remember =
+        input.remember === true && safeStorage.isEncryptionAvailable();
+      revokeSession(database, authenticatedUsers.get(event.sender.id));
+      const token = newSession(database, result.user, remember);
+      authenticatedUsers.set(event.sender.id, token);
+      try {
+        if (remember)
+          await writeFile(
+            rememberedSessionFile(),
+            safeStorage.encryptString(token),
+          );
+        else await rm(rememberedSessionFile(), { force: true });
+      } catch (error) {
+        console.error('Could not update the remembered session:', error.code);
+      }
+      return { ...result, user: getUser(database, result.user.id) };
     }
     return result;
   });
 
-  ipcMain.handle('auth:current-user', (event) => {
+  ipcMain.handle('auth:current-user', async (event) => {
     assertTrustedRenderer(event);
+    if (
+      !authenticatedUsers.has(event.sender.id) &&
+      !restored &&
+      safeStorage.isEncryptionAvailable()
+    ) {
+      try {
+        const token = safeStorage.decryptString(
+          await readFile(rememberedSessionFile()),
+        );
+        if (sessionUser(database, token))
+          authenticatedUsers.set(event.sender.id, token);
+      } catch (error) {
+        if (error.code !== 'ENOENT')
+          console.error('Could not read the remembered session:', error.code);
+      }
+    }
     return {
       ok: true,
-      user: authenticatedUsers.get(event.sender.id) ?? null,
+      user: sessionUser(database, authenticatedUsers.get(event.sender.id)),
     };
   });
 
-  ipcMain.handle('auth:logout', (event) => {
+  ipcMain.handle('auth:logout', async (event) => {
     assertTrustedRenderer(event);
+    revokeSession(database, authenticatedUsers.get(event.sender.id));
     authenticatedUsers.delete(event.sender.id);
+    await rm(rememberedSessionFile(), { force: true });
     return { ok: true };
   });
 
@@ -188,6 +245,10 @@ const registerIpcHandlers = () => {
     const user = requireContactEditor(event);
     return bulkAssignTags(database, user.id, ids, tags);
   });
+  ipcMain.handle('contacts:bulk-status', (event, input) => {
+    const user = requireContactEditor(event);
+    return updateContactStatuses(database, user.id, input);
+  });
 
   ipcMain.handle('contacts:export', async (event, filters) => {
     getAuthenticatedUser(event);
@@ -214,7 +275,10 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('contacts:import', async (event, input) => {
     const user = requireContactEditor(event);
-    return importContacts(database, user.id, input);
+    const result = await importContacts(database, user.id, input);
+    if (result.ok)
+      notify(database, 'import.completed', 'Contact import completed.');
+    return result;
   });
 
   ipcMain.handle('contact-lists:list', (event, search) => {
@@ -249,6 +313,10 @@ const registerIpcHandlers = () => {
       return replaceContactListMembers(database, user.id, listId, contactIds);
     },
   );
+  ipcMain.handle('contact-lists:transfer', (event, input) => {
+    const user = requireContactEditor(event);
+    return transferContacts(database, user.id, input);
+  });
 
   ipcMain.handle('smtp-accounts:list', (event) => {
     getAuthenticatedUser(event);
@@ -279,6 +347,9 @@ const registerIpcHandlers = () => {
     const user = requireSmtpAdmin(event);
     return testSmtpAccount(database, user.id, id, {
       decryptSecret: decryptSmtpSecret,
+    }).then((result) => {
+      if (!result.ok) notify(database, 'smtp.error', result.error);
+      return result;
     });
   });
 
@@ -336,6 +407,28 @@ const registerIpcHandlers = () => {
     const user = requireContactEditor(event);
     return deleteCampaignDraft(database, user.id, id);
   });
+  registerWorkspaceIpc({
+    db: database,
+    getWindow: () => mainWindow,
+    trust: assertTrustedRenderer,
+    authorize,
+    decrypt: decryptSmtpSecret,
+    clearSessions: () => {
+      authenticatedUsers.clear();
+      restored = true;
+    },
+    restoreWithWorker: async (restore) => {
+      restoring = true;
+      try {
+        await worker.stop();
+        await maintenanceWork;
+        return await restore();
+      } finally {
+        restoring = false;
+        worker.start();
+      }
+    },
+  });
 };
 
 const createWindow = () => {
@@ -350,7 +443,7 @@ const createWindow = () => {
     height: 800,
     minWidth: 760,
     minHeight: 620,
-    title: 'Bulk Mail Sender',
+    title: 'Bulk Mail Sender Pro',
     backgroundColor: '#020617',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -374,40 +467,77 @@ const createWindow = () => {
 
   if (developmentUrl) {
     window.loadURL(developmentUrl);
-    window.webContents.openDevTools();
   } else {
     window.loadFile(rendererPath);
   }
 
+  const senderId = window.webContents.id;
   window.on('closed', () => {
-    authenticatedUsers.delete(window.webContents.id);
+    authenticatedUsers.delete(senderId);
     if (mainWindow === window) {
       mainWindow = null;
     }
   });
 };
 
-app
-  .whenReady()
-  .then(() => {
-    database = openUserDatabase(app.getPath('userData'));
-    registerIpcHandlers();
-    createWindow();
+if (ownsWorkspace)
+  app
+    .whenReady()
+    .then(() => {
+      database = openUserDatabase(app.getPath('userData'));
+      worker = createDeliveryWorker(database, { decrypt: decryptSmtpSecret });
+      worker.start();
+      let lastNotification = new Date().toISOString();
+      maintenance = setInterval(() => {
+        if (restoring || maintenanceWork) return;
+        maintenanceWork = automaticBackup(database)
+          .then(() => {
+            if (
+              !settings(database).desktopNotifications ||
+              !Notification.isSupported()
+            )
+              return;
+            const messages = database
+              .prepare(
+                'SELECT message, created_at FROM notifications WHERE created_at > ? ORDER BY created_at',
+              )
+              .all(lastNotification);
+            for (const row of messages) {
+              new Notification({
+                title: 'Bulk Mail Sender Pro',
+                body: row.message,
+              }).show();
+              lastNotification = row.created_at;
+            }
+          })
+          .catch((error) =>
+            console.error('Background maintenance:', error.message),
+          )
+          .finally(() => {
+            maintenanceWork = null;
+          });
+      }, 15000);
+      registerIpcHandlers();
+      createWindow();
+      app.on('second-instance', () => {
+        if (mainWindow?.isMinimized()) mainWindow.restore();
+        mainWindow?.focus();
+      });
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+          createWindow();
+        }
+      });
+    })
+    .catch((error) => {
+      console.error('Failed to initialize Bulk Mail Sender.', error);
+      dialog.showErrorBox(
+        'Bulk Mail Sender could not start',
+        error instanceof Error ? error.message : String(error),
+      );
+      app.quit();
     });
-  })
-  .catch((error) => {
-    console.error('Failed to initialize Bulk Mail Sender.', error);
-    dialog.showErrorBox(
-      'Bulk Mail Sender could not start',
-      error instanceof Error ? error.message : String(error),
-    );
-    app.quit();
-  });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -415,9 +545,14 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (quitting || !database?.open) return;
+  event.preventDefault();
+  quitting = true;
+  clearInterval(maintenance);
   authenticatedUsers.clear();
-  if (database?.open) {
-    database.close();
-  }
+  Promise.allSettled([worker?.stop(), maintenanceWork]).finally(() => {
+    if (database?.open) database.close();
+    app.quit();
+  });
 });

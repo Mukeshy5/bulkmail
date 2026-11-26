@@ -1,607 +1,725 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import EmailPreviewFrame from './EmailPreview.jsx';
-import { ErrorPanel, Modal, PageHeading, useToast } from './ui.jsx';
+import { Modal, PageHeading, formatDate, useToast } from './ui.jsx';
+import {
+  Action,
+  call,
+  DataTable,
+  ErrorText,
+  Field,
+  localInput,
+  QueryState,
+  useQuery,
+} from './workspace-ui.jsx';
 
-const emptyCampaign = {
+const empty = {
   name: '',
   description: '',
   campaignType: 'marketing',
+  listIds: [],
+  segmentId: '',
+  exclusions: [],
   subject: '',
   senderName: '',
   senderEmail: '',
   replyToEmail: '',
-  recipientListId: '',
-  templateId: '',
   smtpAccountId: '',
+  previewText: '',
+  templateId: '',
+  customHtml: '',
 };
-
-const campaignTypes = [
-  ['marketing', 'Marketing'],
-  ['newsletter', 'Newsletter'],
-  ['promotion', 'Promotion'],
-  ['announcement', 'Announcement'],
-  ['customer_update', 'Customer update'],
-  ['transactional', 'Transactional'],
+const kinds = [
+  'marketing',
+  'newsletter',
+  'promotion',
+  'announcement',
+  'customer_update',
+  'transactional',
+];
+const stages = ['Details', 'Audience', 'Sender', 'Design', 'Review', 'Send'];
+const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const timezones = [
+  ...new Set([zone, 'UTC', ...Intl.supportedValuesOf('timeZone')]),
 ];
 
-export default function Campaigns({ canEdit, initialAction }) {
-  const [campaigns, setCampaigns] = useState([]);
-  const [lists, setLists] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [smtpAccounts, setSmtpAccounts] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function Campaigns({
+  canEdit,
+  canSend,
+  initialAction,
+  calendar = false,
+  navigate,
+}) {
+  const [rows, setRows] = useState(null);
+  const [resources, setResources] = useState(null);
+  const [draft, setDraft] = useState(() => {
+    if (!canEdit) return null;
+    if (initialAction === 'create') return {};
+    return initialAction?.templateId ? initialAction : null;
+  });
+  const [selected, setSelected] = useState(null);
+  const initialOpenId = useRef(initialAction?.openId);
+  const [search, setSearch] = useState(initialAction?.search || '');
   const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
-  const [editing, setEditing] = useState(undefined);
-  const [previewing, setPreviewing] = useState(null);
-  const [search, setSearch] = useState('');
+  const [revision, setRevision] = useState(0);
+  const [month, setMonth] = useState(() =>
+    new Date().toISOString().slice(0, 7),
+  );
   const showToast = useToast();
+  const refresh = () => setRevision((value) => value + 1);
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const result = await window.bulkMail.campaigns.list(search);
+        if (!result.ok) throw new Error(result.error);
+        if (active) {
+          setRows(result.campaigns);
+          setError('');
+          if (initialOpenId.current) {
+            setSelected(
+              result.campaigns.find(
+                (row) => row.id === initialOpenId.current,
+              ) || null,
+            );
+            initialOpenId.current = null;
+          }
+        }
+      } catch (cause) {
+        if (active) setError(cause.message);
+      }
+    }
+    load();
+    const interval = setInterval(load, 3000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [search, revision]);
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
     Promise.all([
-      window.bulkMail.campaigns.list(search),
       window.bulkMail.contactLists.list(''),
+      call('segments'),
       window.bulkMail.emailTemplates.list(),
       window.bulkMail.smtpAccounts.list(),
     ])
-      .then(([campaignResult, listResult, templateResult, smtpResult]) => {
-        const failed = [
-          campaignResult,
-          listResult,
-          templateResult,
-          smtpResult,
-        ].find((result) => !result.ok);
-        if (failed) throw new Error(failed.error);
-        if (active) {
-          setCampaigns(campaignResult.campaigns);
-          setLists(listResult.lists);
-          setTemplates(templateResult.templates);
-          setSmtpAccounts(
-            smtpResult.accounts.filter((account) => account.isEnabled),
-          );
-          setError('');
-        }
+      .then(([lists, segments, templates, smtp]) => {
+        if (active)
+          setResources({
+            lists: lists.lists,
+            segments: segments.segments,
+            templates: templates.templates,
+            smtp: smtp.accounts.filter((account) => account.isEnabled),
+          });
       })
       .catch((cause) => {
-        if (active) {
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : 'Could not load campaign setup data.',
-          );
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+        if (active) setError(cause.message);
       });
     return () => {
       active = false;
     };
-  }, [reload, search]);
+  }, []);
 
-  useEffect(() => {
-    if (initialAction === 'create' && canEdit) setEditing(null);
-  }, [initialAction, canEdit]);
-
-  async function duplicate(campaign) {
-    try {
-      const result = await window.bulkMail.campaigns.duplicate(campaign.id);
-      if (!result.ok) {
-        showToast(result.error, 'error');
-        return;
-      }
-      showToast('Campaign draft duplicated.');
-      setReload((value) => value + 1);
-    } catch (cause) {
-      showToast(
-        cause instanceof Error
-          ? cause.message
-          : 'Could not duplicate campaign.',
-        'error',
-      );
-    }
-  }
-
-  async function remove(campaign) {
+  async function change(row, action) {
     if (
+      ['delete', 'cancel'].includes(action) &&
       !window.confirm(
-        `Delete draft "${campaign.name}"? This action cannot be undone.`,
+        action === 'delete'
+          ? 'Delete this draft?'
+          : 'Cancel remaining submissions for this campaign?',
       )
-    ) {
+    )
       return;
-    }
     try {
-      const result = await window.bulkMail.campaigns.delete(campaign.id);
-      if (!result.ok) {
-        showToast(result.error, 'error');
-        return;
-      }
-      showToast('Campaign draft deleted.');
-      setReload((value) => value + 1);
-    } catch (cause) {
+      const result =
+        action === 'duplicate' || action === 'delete'
+          ? await window.bulkMail.campaigns[action](row.id)
+          : await call('control', { id: row.id, action });
+      if (!result.ok) throw new Error(result.error);
       showToast(
-        cause instanceof Error ? cause.message : 'Could not delete campaign.',
-        'error',
+        action === 'duplicate' ? 'Draft duplicated.' : 'Campaign updated.',
       );
+      refresh();
+    } catch (cause) {
+      showToast(cause.message, 'error');
     }
   }
 
-  if (error && !campaigns.length) {
-    return (
-      <ErrorPanel
-        message={error}
-        onRetry={() => setReload((value) => value + 1)}
-      />
-    );
-  }
-
+  const visible = (rows || []).filter((row) => !calendar || row.scheduledAt);
+  const days = new Date(
+    Number(month.slice(0, 4)),
+    Number(month.slice(5)),
+    0,
+  ).getDate();
+  const offset = new Date(month + '-01T12:00:00').getDay();
+  const scheduledDate = (row) =>
+    localInput(row.scheduledAt, row.timezone || zone).slice(0, 10);
   return (
-    <div className="space-y-6">
+    <div className="studio-page">
       <PageHeading
-        eyebrow="Campaign workspace"
-        title="Campaign drafts"
-        description="Prepare the sender, audience, and reusable content before delivery is enabled."
+        title={calendar ? 'Campaign calendar' : 'Campaigns'}
+        description={
+          calendar
+            ? 'Review campaign times in their scheduled time zones.'
+            : 'Create campaigns, review your audience, and monitor delivery progress.'
+        }
         actions={
-          canEdit && (
-            <button
-              className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
-              type="button"
-              onClick={() => setEditing(null)}
+          <>
+            <Action
+              onClick={() => navigate(calendar ? 'campaigns' : 'schedule')}
             >
-              + Create campaign
-            </button>
-          )
+              {calendar ? 'All campaigns' : 'Calendar'}
+            </Action>
+            {canEdit && !calendar && (
+              <Action primary onClick={() => setDraft({})}>
+                New campaign
+              </Action>
+            )}
+          </>
         }
       />
-
-      <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900 sm:flex-row sm:items-start">
-        <span className="text-lg" aria-hidden="true">
-          !
-        </span>
-        <p>
-          Campaigns can be saved as drafts only. Sending, scheduling, consent
-          checks, and unsubscribe processing are not enabled yet.
-        </p>
-      </div>
-
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="font-semibold text-slate-900">Your campaigns</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              {campaigns.length} {campaigns.length === 1 ? 'draft' : 'drafts'}
-            </p>
-          </div>
+      <div className="studio-filters">
+        <Field label="Search campaigns">
           <input
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 sm:max-w-xs"
             type="search"
-            placeholder="Search campaigns"
-            aria-label="Search campaigns"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
           />
-        </div>
-        {error && (
-          <p className="border-b border-rose-100 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-            {error}
-          </p>
+        </Field>
+        {calendar && (
+          <Field label="Month">
+            <input
+              type="month"
+              value={month}
+              onChange={(e) => e.target.value && setMonth(e.target.value)}
+            />
+          </Field>
         )}
-        {loading ? (
-          <p className="p-8 text-center text-sm text-slate-500">
-            Loading campaigns…
-          </p>
-        ) : campaigns.length ? (
-          <div className="divide-y divide-slate-100">
-            {campaigns.map((campaign) => (
-              <article
-                className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"
-                key={campaign.id}
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-semibold text-slate-900">
-                      {campaign.name}
-                    </h3>
-                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium capitalize text-amber-700">
-                      {campaign.status}
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium capitalize text-slate-600">
-                      {campaign.campaignType.replaceAll('_', ' ')}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate text-sm text-slate-600">
-                    {campaign.subject || 'Subject not set'}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-500">
-                    Audience: {campaign.recipientListName || 'Not selected'}
-                    {' · '}Template: {campaign.templateName || 'Not selected'}
-                    {' · '}SMTP: {campaign.smtpAccountName || 'Not selected'}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Updated {new Date(campaign.updatedAt).toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2 sm:justify-end">
-                  <button
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    type="button"
-                    onClick={() =>
-                      setPreviewing({
-                        campaign,
-                        template:
-                          templates.find(
-                            (template) => template.id === campaign.templateId,
-                          ) || null,
-                      })
-                    }
-                  >
-                    Preview
-                  </button>
-                  {canEdit && campaign.status === 'draft' && (
-                    <>
-                      <button
-                        className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                        type="button"
-                        onClick={() => setEditing(campaign)}
-                      >
-                        Edit draft
-                      </button>
-                      <button
-                        className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
-                        type="button"
-                        onClick={() => duplicate(campaign)}
-                      >
-                        Duplicate
-                      </button>
-                      <button
-                        className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                        type="button"
-                        onClick={() => remove(campaign)}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  )}
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="px-6 py-16 text-center">
-            <h3 className="font-semibold text-slate-900">No campaigns yet</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Create a draft to start setting up your next campaign.
-            </p>
-            {canEdit && (
-              <button
-                className="mt-5 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500"
-                type="button"
-                onClick={() => setEditing(null)}
-              >
-                Create campaign draft
-              </button>
-            )}
-          </div>
-        )}
-      </section>
-
-      {editing !== undefined && canEdit && (
-        <CampaignEditor
-          campaign={editing}
-          lists={lists}
-          templates={templates}
-          smtpAccounts={smtpAccounts}
-          onClose={() => setEditing(undefined)}
-          onSaved={() => {
-            setEditing(undefined);
-            showToast(
-              editing ? 'Campaign draft saved.' : 'Campaign draft created.',
+      </div>
+      <ErrorText text={error} />
+      {calendar && (
+        <section className="studio-card studio-calendar">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((name) => (
+            <strong key={name}>{name}</strong>
+          ))}
+          {Array.from({ length: offset }, (_, index) => (
+            <div key={'offset-' + index} />
+          ))}
+          {Array.from({ length: days }, (_, index) => {
+            const date = month + '-' + String(index + 1).padStart(2, '0');
+            return (
+              <div className="studio-calendar-day" key={date}>
+                <span>{index + 1}</span>
+                {visible
+                  .filter((row) => scheduledDate(row) === date)
+                  .map((row) => (
+                    <button
+                      type="button"
+                      key={row.id}
+                      onClick={() => setSelected(row)}
+                    >
+                      {localInput(row.scheduledAt, row.timezone).slice(11)}{' '}
+                      {row.name}
+                    </button>
+                  ))}
+              </div>
             );
-            setReload((value) => value + 1);
+          })}
+        </section>
+      )}
+      <section className="studio-card">
+        {!rows && <p className="studio-empty">Loading campaigns…</p>}
+        {rows && !visible.length && (
+          <p className="studio-empty">No campaigns match this view.</p>
+        )}
+        {visible.map((row) => (
+          <article key={row.id} className="studio-record">
+            <div>
+              <h2>
+                {row.name}{' '}
+                <span className={'studio-badge status-' + row.status}>
+                  {row.status}
+                </span>
+              </h2>
+              <p>
+                {row.subject || 'Subject pending'} · {row.listIds?.length || 0}{' '}
+                lists{row.segmentId ? ' · 1 segment' : ''}
+              </p>
+              {row.scheduledAt && (
+                <p>
+                  {localInput(row.scheduledAt, row.timezone).replace('T', ' ')}{' '}
+                  · {row.timezone}
+                </p>
+              )}
+            </div>
+            <div className="studio-actions">
+              <Action onClick={() => setSelected(row)}>
+                {row.status === 'draft' ? 'Review' : 'Statistics'}
+              </Action>
+              {canEdit && row.status === 'draft' && (
+                <>
+                  <Action onClick={() => setDraft(row)}>Edit</Action>
+                  <Action danger onClick={() => change(row, 'delete')}>
+                    Delete
+                  </Action>
+                </>
+              )}
+              {canEdit && (
+                <Action onClick={() => change(row, 'duplicate')}>
+                  Duplicate
+                </Action>
+              )}
+              {canSend && ['queued', 'sending'].includes(row.status) && (
+                <Action onClick={() => change(row, 'pause')}>Pause</Action>
+              )}
+              {canSend && row.status === 'paused' && (
+                <Action onClick={() => change(row, 'resume')}>Resume</Action>
+              )}
+              {canSend &&
+                ['scheduled', 'queued', 'sending', 'paused'].includes(
+                  row.status,
+                ) && (
+                  <Action danger onClick={() => change(row, 'cancel')}>
+                    Cancel
+                  </Action>
+                )}
+            </div>
+          </article>
+        ))}
+      </section>
+      {draft && resources && (
+        <Draft
+          draft={draft}
+          resources={resources}
+          onClose={() => setDraft(null)}
+          onSaved={(campaign) => {
+            setDraft(null);
+            refresh();
+            setSelected(campaign);
           }}
         />
       )}
-      {previewing && (
-        <CampaignPreview
-          campaign={previewing.campaign}
-          template={previewing.template}
-          onClose={() => setPreviewing(null)}
+      {selected && resources && (
+        <CampaignDetails
+          row={selected}
+          resources={resources}
+          canSend={canSend}
+          onClose={() => setSelected(null)}
+          onChanged={() => {
+            setSelected(null);
+            refresh();
+          }}
         />
       )}
     </div>
   );
 }
 
-function CampaignEditor({
-  campaign,
-  lists,
-  templates,
-  smtpAccounts,
-  onClose,
-  onSaved,
-}) {
-  const [form, setForm] = useState(() => ({
-    ...emptyCampaign,
-    ...(campaign
-      ? {
-          name: campaign.name,
-          description: campaign.description,
-          campaignType: campaign.campaignType,
-          subject: campaign.subject,
-          senderName: campaign.senderName,
-          senderEmail: campaign.senderEmail,
-          replyToEmail: campaign.replyToEmail,
-          recipientListId: campaign.recipientListId || '',
-          templateId: campaign.templateId || '',
-          smtpAccountId: campaign.smtpAccountId || '',
-        }
-      : {}),
-  }));
+function Draft({ draft, resources, onClose, onSaved }) {
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState({
+    ...empty,
+    ...draft,
+    segmentId: draft.segmentId || '',
+    templateId: draft.templateId || '',
+    smtpAccountId: draft.smtpAccountId || '',
+  });
+  const [exclusions, setExclusions] = useState(
+    (draft.exclusions || []).join('\n'),
+  );
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [preview, setPreview] = useState(false);
+  const set = (key, value) =>
+    setForm((previous) => ({ ...previous, [key]: value }));
+  const text = (key) => ({
+    value: form[key],
+    onChange: (e) => set(key, e.target.value),
+  });
+  const template = resources.templates.find(
+    (item) => item.id === form.templateId,
+  );
 
-  function update(event) {
-    const { name, value } = event.target;
-    setForm((current) => {
-      const next = { ...current, [name]: value };
-      if (name === 'templateId' && !current.subject) {
-        next.subject =
-          templates.find((item) => item.id === value)?.subject || '';
-      }
-      return next;
-    });
-  }
-
-  async function submit(event) {
-    event.preventDefault();
+  async function save() {
     setError('');
-    if (!event.currentTarget.reportValidity()) return;
+    if (!form.name.trim()) {
+      setStep(0);
+      setError('Enter a campaign name.');
+      return;
+    }
     setBusy(true);
     try {
       const input = {
         ...form,
-        recipientListId: form.recipientListId || null,
-        templateId: form.templateId || null,
-        smtpAccountId: form.smtpAccountId || null,
+        exclusions: exclusions.split(/[\s,]+/).filter(Boolean),
       };
-      const result = campaign
-        ? await window.bulkMail.campaigns.update(campaign.id, input)
+      const result = draft.id
+        ? await window.bulkMail.campaigns.update(draft.id, input)
         : await window.bulkMail.campaigns.create(input);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      onSaved();
+      if (!result.ok) throw new Error(result.error);
+      onSaved(result.campaign);
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'Could not save this campaign.',
-      );
+      setError(cause.message);
     } finally {
       setBusy(false);
     }
   }
 
-  const fieldClass =
-    'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100';
-  const selectedTemplate = templates.find(
-    (template) => template.id === form.templateId,
-  );
-
   return (
     <Modal
-      title={campaign ? 'Edit campaign draft' : 'Create campaign draft'}
-      eyebrow="Campaign setup"
+      title={draft.id ? 'Edit campaign' : 'New campaign'}
       onClose={onClose}
       size="max-w-4xl"
     >
-      <form className="mt-5" onSubmit={submit}>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm font-medium text-slate-700">
-            Campaign name
-            <input
-              className={fieldClass}
-              name="name"
-              maxLength={150}
-              required
-              value={form.name}
-              onChange={update}
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Campaign type
-            <select
-              className={`${fieldClass} bg-white`}
-              name="campaignType"
-              value={form.campaignType}
-              onChange={update}
-            >
-              {campaignTypes.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700 sm:col-span-2">
-            Description
-            <textarea
-              className={`${fieldClass} min-h-20`}
-              name="description"
-              maxLength={1000}
-              value={form.description}
-              onChange={update}
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Recipient list
-            <select
-              className={`${fieldClass} bg-white`}
-              name="recipientListId"
-              value={form.recipientListId}
-              onChange={update}
-            >
-              <option value="">Select later</option>
-              {lists.map((list) => (
-                <option key={list.id} value={list.id}>
-                  {list.name} ({list.contactCount})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Email template
-            <select
-              className={`${fieldClass} bg-white`}
-              name="templateId"
-              value={form.templateId}
-              onChange={update}
-            >
-              <option value="">Select later</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700 sm:col-span-2">
-            Email subject
-            <input
-              className={fieldClass}
-              name="subject"
-              maxLength={200}
-              value={form.subject}
-              onChange={update}
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Sender name
-            <input
-              className={fieldClass}
-              name="senderName"
-              maxLength={150}
-              value={form.senderName}
-              onChange={update}
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Sender email
-            <input
-              className={fieldClass}
-              name="senderEmail"
-              type="email"
-              maxLength={254}
-              value={form.senderEmail}
-              onChange={update}
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Reply-to email
-            <input
-              className={fieldClass}
-              name="replyToEmail"
-              type="email"
-              maxLength={254}
-              value={form.replyToEmail}
-              onChange={update}
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            SMTP account
-            <select
-              className={`${fieldClass} bg-white`}
-              name="smtpAccountId"
-              value={form.smtpAccountId}
-              onChange={update}
-            >
-              <option value="">Select later</option>
-              {smtpAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {selectedTemplate && (
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-800">
-                Template preview
-              </h3>
-              <button
-                className="text-xs font-semibold text-indigo-700 hover:text-indigo-500"
-                type="button"
-                onClick={() => setPreview((value) => !value)}
-              >
-                {preview ? 'Hide preview' : 'Show preview'}
-              </button>
-            </div>
-            {preview && (
+      <nav className="studio-steps" aria-label="Campaign setup">
+        {stages.map((name, index) => (
+          <button
+            type="button"
+            key={name}
+            className={step === index ? 'current' : ''}
+            aria-current={step === index ? 'step' : undefined}
+            onClick={() => setStep(index)}
+          >
+            {name}
+          </button>
+        ))}
+      </nav>
+      <form
+        className="studio-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (step < 4) setStep(step + 1);
+          else save();
+        }}
+      >
+        {step === 0 && (
+          <>
+            <Field label="Campaign name">
+              <input required maxLength={150} {...text('name')} />
+            </Field>
+            <Field label="Campaign type">
+              <select {...text('campaignType')}>
+                {kinds.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {kind.replaceAll('_', ' ')}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Description" wide>
+              <textarea maxLength={1000} {...text('description')} />
+            </Field>
+          </>
+        )}
+        {step === 1 && (
+          <>
+            <fieldset>
+              <legend>Contact lists</legend>
+              {resources.lists.length ? (
+                resources.lists.map((list) => (
+                  <label className="studio-check" key={list.id}>
+                    <input
+                      type="checkbox"
+                      checked={form.listIds.includes(list.id)}
+                      onChange={(e) =>
+                        set(
+                          'listIds',
+                          e.target.checked
+                            ? [...form.listIds, list.id]
+                            : form.listIds.filter((id) => id !== list.id),
+                        )
+                      }
+                    />
+                    {list.name}
+                  </label>
+                ))
+              ) : (
+                <p className="studio-empty">
+                  Create a contact list to use it here.
+                </p>
+              )}
+            </fieldset>
+            <Field label="Saved segment">
+              <select {...text('segmentId')}>
+                <option value="">No segment</option>
+                {resources.segments.map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segment.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Exclude email addresses" wide>
+              <textarea
+                value={exclusions}
+                onChange={(e) => setExclusions(e.target.value)}
+                placeholder="One address per line"
+              />
+            </Field>
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <Field label="SMTP account">
+              <select {...text('smtpAccountId')}>
+                <option value="">Use default</option>
+                {resources.smtp.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} · {item.connectionStatus}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Sender name">
+              <input maxLength={150} {...text('senderName')} />
+            </Field>
+            <Field label="Sender email">
+              <input type="email" maxLength={254} {...text('senderEmail')} />
+            </Field>
+            <Field label="Reply-to email">
+              <input type="email" maxLength={254} {...text('replyToEmail')} />
+            </Field>
+            <Field label="Subject" wide>
+              <input maxLength={200} {...text('subject')} />
+            </Field>
+            <Field label="Preview text" wide>
+              <input maxLength={250} {...text('previewText')} />
+            </Field>
+          </>
+        )}
+        {step === 3 && (
+          <>
+            <Field label="Email template">
+              <select {...text('templateId')}>
+                <option value="">Choose a template</option>
+                {resources.templates.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Import HTML">
+              <input
+                type="file"
+                accept=".html,.htm,text/html"
+                onChange={async (e) => {
+                  const file = e.target.files[0];
+                  if (file && file.size <= 500000)
+                    set('customHtml', await file.text());
+                  else if (file) setError('HTML can be up to 500 KB.');
+                }}
+              />
+            </Field>
+            <Field label="Custom HTML (overrides template)" wide>
+              <textarea rows={7} maxLength={500000} {...text('customHtml')} />
+            </Field>
+          </>
+        )}
+        {step >= 4 && (
+          <div className="studio-wide">
+            <p>
+              {form.name || 'Untitled campaign'} · {form.listIds.length}{' '}
+              selected lists{form.segmentId && ' · 1 segment'}
+            </p>
+            <p className="studio-muted">
+              Save the draft to check subscriber eligibility and sender
+              settings, send a test, or schedule a campaign.
+            </p>
+            {(form.customHtml || template) && (
               <EmailPreviewFrame
-                className="h-64 w-full rounded-lg border border-slate-200 bg-white"
                 title="Campaign email preview"
-                htmlBody={selectedTemplate.htmlBody}
+                className="studio-email-frame"
+                htmlBody={form.customHtml || template.htmlBody}
               />
             )}
           </div>
         )}
-        <p className="mt-3 min-h-5 text-sm text-rose-600" role="alert">
-          {error}
-        </p>
-        <div className="mt-4 flex justify-end gap-3">
-          <button
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            type="button"
-            onClick={onClose}
-          >
-            Cancel
-          </button>
-          <button
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
-            type="submit"
-            disabled={busy}
-          >
-            {busy ? 'Saving…' : 'Save as draft'}
-          </button>
+        <ErrorText text={error} />
+        <div className="studio-actions studio-wide">
+          {step > 0 && <Action onClick={() => setStep(step - 1)}>Back</Action>}
+          <Action disabled={busy} onClick={save}>
+            Save draft
+          </Action>
+          <Action primary type="submit" disabled={busy}>
+            {step >= 4 ? 'Save & review' : 'Continue'}
+          </Action>
         </div>
       </form>
     </Modal>
   );
 }
 
-function CampaignPreview({ campaign, template, onClose }) {
+function CampaignDetails({ row, resources, canSend, onClose, onChanged }) {
+  const review = useQuery('review', row.id, 0, 3000);
+  const metrics = useQuery('metrics', row.id, 0, 3000);
+  const [timezone, setTimezone] = useState(
+    row.scheduledAt ? row.timezone : zone,
+  );
+  const [localDate, setLocalDate] = useState(() =>
+    localInput(row.scheduledAt, row.timezone || zone),
+  );
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const showToast = useToast();
+  const template = resources.templates.find(
+    (item) => item.id === row.templateId,
+  );
+  const html = row.customHtml || template?.htmlBody;
+  const canPlan = canSend && ['draft', 'scheduled'].includes(row.status);
+
+  async function run(method, input) {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await call(method, input);
+      if (!result.ok) return;
+      if (method === 'sendTest') showToast('SMTP accepted the test email.');
+      if (method === 'plan') {
+        showToast(input.localDate ? 'Campaign scheduled.' : 'Campaign queued.');
+        onChanged();
+      }
+      if (method === 'exportReport') showToast('Report exported.');
+    } catch (cause) {
+      setError(cause.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <Modal
-      title={campaign.name}
-      eyebrow="Draft preview"
-      onClose={onClose}
-      size="max-w-4xl"
-    >
-      <p className="mt-2 text-sm text-slate-600">
-        Subject: {campaign.subject || 'Not set'}
-      </p>
-      {template ? (
-        <>
-          <p className="mt-1 text-xs text-slate-500">
-            Template: {template.name}
-          </p>
-          <EmailPreviewFrame
-            className="mt-4 h-[60vh] w-full rounded-xl border border-slate-200 bg-white"
-            title="Campaign template preview"
-            htmlBody={template.htmlBody}
-          />
-        </>
-      ) : (
-        <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
-          Select an email template to preview the campaign content.
+    <Modal title={row.name} onClose={onClose} size="max-w-4xl">
+      <div className="studio-page" style={{ marginTop: 20 }}>
+        <p>
+          <strong>Subject</strong>{' '}
+          {row.subject || template?.subject || 'Pending'}
         </p>
-      )}
+        {canPlan && (
+          <>
+            <QueryState query={review} />
+            <p>{review.data?.count ?? '—'} eligible subscribers</p>
+            {review.data?.issues.map((issue) => (
+              <p className="studio-error" key={issue}>
+                {issue}
+              </p>
+            ))}
+            <div className="studio-filters">
+              <Field label="Scheduled date and time">
+                <input
+                  type="datetime-local"
+                  value={localDate}
+                  onChange={(e) => setLocalDate(e.target.value)}
+                />
+              </Field>
+              <Field label="Time zone">
+                <select
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                >
+                  {timezones.map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="studio-actions">
+              <Action disabled={busy} onClick={() => run('sendTest', row.id)}>
+                Send test to my email
+              </Action>
+              <Action
+                disabled={
+                  busy ||
+                  !localDate ||
+                  !review.data ||
+                  review.data.issues.length > 0
+                }
+                onClick={() => run('plan', { id: row.id, localDate, timezone })}
+              >
+                {row.status === 'scheduled' ? 'Update schedule' : 'Schedule'}
+              </Action>
+              <Action
+                primary
+                disabled={busy || !review.data || review.data.issues.length > 0}
+                onClick={() =>
+                  window.confirm(
+                    'Queue this campaign for ' +
+                      review.data.count +
+                      ' eligible subscribers?',
+                  ) && run('plan', { id: row.id })
+                }
+              >
+                Send now
+              </Action>
+            </div>
+          </>
+        )}
+        <ErrorText text={error} />
+        {row.status !== 'draft' && (
+          <>
+            <QueryState query={metrics} />
+            {metrics.data?.data && (
+              <CampaignProgress data={metrics.data.data} />
+            )}
+            <div>
+              <Action
+                disabled={busy}
+                onClick={() =>
+                  run('exportReport', {
+                    type: 'campaigns',
+                    campaignId: row.id,
+                    format: 'csv',
+                  })
+                }
+              >
+                Export campaign report
+              </Action>
+            </div>
+          </>
+        )}
+        {html && (
+          <EmailPreviewFrame
+            title="Email preview"
+            className="studio-email-frame"
+            htmlBody={html}
+          />
+        )}
+      </div>
     </Modal>
+  );
+}
+
+function CampaignProgress({ data }) {
+  const processed = data.total - data.remaining;
+  return (
+    <section className="studio-card">
+      <h2>Queue progress</h2>
+      <p>
+        {processed} of {data.total} processed · {data.states.submitted || 0}{' '}
+        submitted · {data.states.failed || 0} failed · {data.remaining}{' '}
+        remaining
+      </p>
+      <progress
+        aria-label="Sending progress"
+        max={data.total || 1}
+        value={processed}
+      />
+      <p>
+        Started {formatDate(data.campaign.started_at)} · Completed{' '}
+        {formatDate(data.campaign.completed_at)}
+      </p>
+      <DataTable
+        rows={Object.entries(data.states).map(([state, count]) => ({
+          state,
+          count,
+        }))}
+      />
+      <DataTable rows={data.events} empty="No tracking events recorded." />
+      {data.logs.length > 0 && (
+        <details>
+          <summary>Submission log</summary>
+          <DataTable rows={data.logs} />
+        </details>
+      )}
+    </section>
   );
 }

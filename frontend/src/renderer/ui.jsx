@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useEffect, useRef } from 'react';
 
 export const ToastContext = createContext(() => {});
 
@@ -74,6 +74,14 @@ export function Modal({
   children,
   size = 'max-w-2xl',
 }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    dialogRef.current?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
   return (
     <div
       className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-sm"
@@ -83,9 +91,32 @@ export function Modal({
       }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') onClose();
+        if (event.key === 'Tab') {
+          const nodes = [
+            ...dialogRef.current.querySelectorAll(
+              'button, input, select, textarea, a[href], summary',
+            ),
+          ].filter(
+            (node) =>
+              !node.matches(':disabled') && node.getClientRects().length,
+          );
+          const first = nodes[0];
+          const last = nodes.at(-1);
+          if (
+            event.shiftKey &&
+            [first, dialogRef.current].includes(document.activeElement)
+          ) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }
       }}
     >
       <section
+        ref={dialogRef}
         className={`my-auto w-full ${size} rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-2xl sm:p-8`}
         role="dialog"
         aria-modal="true"

@@ -105,7 +105,7 @@ function validateRegistration(input) {
   }
   if (
     password.length < 12 ||
-    password.length > 128 ||
+    Buffer.byteLength(password) > 72 ||
     !/[a-z]/.test(password) ||
     !/[A-Z]/.test(password) ||
     !/[0-9]/.test(password) ||
@@ -113,14 +113,18 @@ function validateRegistration(input) {
   ) {
     return {
       error:
-        'Password must be 12–128 characters and include uppercase, lowercase, a number, and a symbol.',
+        'Password must be 12–72 UTF-8 bytes and include uppercase, lowercase, a number, and a symbol.',
     };
   }
 
   return { fullName, username, email, password };
 }
 
-export async function registerUser(database, input) {
+export async function registerUser(
+  database,
+  input,
+  { setupOnly = false } = {},
+) {
   const details = validateRegistration(input);
   if (details.error) {
     return { ok: false, error: details.error };
@@ -142,6 +146,7 @@ export async function registerUser(database, input) {
     const userCount = database
       .prepare('SELECT COUNT(*) AS count FROM users')
       .get().count;
+    if (setupOnly && userCount !== 0) return null;
     const role = userCount === 0 ? 'super_admin' : 'viewer';
     const user = {
       id: randomUUID(),
@@ -168,7 +173,13 @@ export async function registerUser(database, input) {
   });
 
   try {
-    return { ok: true, user: createUser.immediate() };
+    const user = createUser.immediate();
+    return user
+      ? { ok: true, user }
+      : {
+          ok: false,
+          error: 'The workspace administrator creates additional accounts.',
+        };
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return {
@@ -220,6 +231,9 @@ export async function loginUser(database, input) {
 
   const passwordMatches = await bcrypt.compare(password, user.password_hash);
   if (!passwordMatches) {
+    database
+      .prepare('INSERT INTO login_history VALUES (?, ?, 0, ?)')
+      .run(randomUUID(), user.id, new Date().toISOString());
     const isLocked = recordFailedLogin(database, user.id);
     return {
       ok: false,
@@ -236,5 +250,22 @@ export async function loginUser(database, input) {
     };
   }
 
-  return { ok: true, user: safeUser(user) };
+  const current = database
+    .prepare(
+      'SELECT * FROM users WHERE id = ? AND is_active = 1 AND password_hash = ?',
+    )
+    .get(user.id, user.password_hash);
+  if (!current) return { ok: false, error: genericLoginError };
+  const lastLogin = new Date().toISOString();
+  database
+    .transaction(() => {
+      database
+        .prepare('UPDATE users SET last_login = ? WHERE id = ?')
+        .run(lastLogin, user.id);
+      database
+        .prepare('INSERT INTO login_history VALUES (?, ?, 1, ?)')
+        .run(randomUUID(), user.id, lastLogin);
+    })
+    .immediate();
+  return { ok: true, user: safeUser(current) };
 }
