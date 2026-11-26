@@ -2,3 +2,9 @@ node_modules/
 .env
 .env.*
 !.env.example
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+credentials.dpapi
+credentials.key

@@ -2,9 +2,17 @@
 
 Bulk Mail Sender Pro is a Windows desktop workspace for permission-based email campaigns. It uses Electron, React JSX, Vite, Tailwind CSS, Node.js, SQLite, and Nodemailer. The optional public service handles subscriber signup, unsubscribe links, engagement tracking, and provider feedback over HTTPS.
 
-## Run the desktop app
+## Run the backend and frontend
 
-Use Node.js 24 and npm. From the project directory:
+Use Node.js 24 and npm. Start the backend in one PowerShell terminal:
+
+```powershell
+cd backend
+npm ci
+npm start
+```
+
+Start the Electron frontend in a second terminal:
 
 ```powershell
 cd frontend
@@ -12,9 +20,21 @@ npm ci
 npm start
 ```
 
-Create the Super Admin account on first launch. The Users page can then create additional accounts and adjust editing and sending permissions for non-administrator roles. Generate and save a one-time recovery code from Settings. The app can also remember your session if operating-system secure storage is available.
+The desktop app connects to the backend API at `http://127.0.0.1:3002`. The backend owns authentication, SMTP credentials, contacts, campaigns, the delivery queue, reports, and backups. It creates and migrates `backend/data/bulk-mail-sender.sqlite` by default. Set `BULK_MAIL_DB_PATH` in `backend/.env` to use another backend database location. If you change `DESKTOP_API_PORT` in that file, set `BULK_MAIL_API_URL` in the terminal that launches Electron, for example `$env:BULK_MAIL_API_URL = 'http://127.0.0.1:3032'`. The desktop API stays bound to loopback and should remain outside the public reverse proxy.
 
-The app creates and migrates `bulk-mail-sender.sqlite` in Electron's Windows user data directory. Settings displays the exact database path. Existing installations retain the `Bulk Mail Sender` profile directory. SQLite data survives application restarts. Windows protects saved SMTP credentials and remembered sessions using Electron's operating-system-backed secure storage.
+Create the Super Admin account on a new database. The Users page can then create additional accounts and adjust editing and sending permissions. Generate and save a one-time recovery code from Settings. Electron can remember a sign-in by storing an encrypted backend session token in its user profile.
+
+On Windows, the backend protects its SMTP encryption key with the Windows data protection API for the user account running the backend. On other platforms it uses a private key file alongside the database. To provide a key through a managed secret store, set `BULK_MAIL_CREDENTIAL_KEY` to a base64-encoded 32-byte key. Keep the same key when moving the database or restoring SMTP credentials under a different service account.
+
+## Transfer an existing desktop database
+
+Close the old desktop app and stop the new backend. Before the new backend creates its database, run the following from the `backend` directory:
+
+```powershell
+npm run migrate:desktop -- "$env:APPDATA\Bulk Mail Sender\bulk-mail-sender.sqlite"
+```
+
+The migration snapshots the old SQLite file, upgrades the copy under `backend/data`, and preserves the original. It refuses to overwrite an existing backend database. Sign in with the same username and password afterward. Any SMTP account copied from the old Electron encryption needs its credentials entered and tested again. The migration pauses in-progress campaigns and preserves scheduled times.
 
 ## Run a campaign
 
@@ -24,20 +44,13 @@ The app creates and migrates `bulk-mail-sender.sqlite` in Electron's Windows use
 4. Choose a library template, create a design in Email Builder, or import HTML. Use `{{first_name}}`, `{{last_name}}`, `{{full_name}}`, `{{email}}`, `{{company}}`, `{{country}}`, and `{{unsubscribe_url}}`. A fallback can be specified as `{{first_name | default: "there"}}`.
 5. Create a campaign, select lists or a saved segment, and review the eligible count. A test email goes only to the signed-in user's email address. Queue the campaign or choose a time and IANA time zone.
 
-The desktop app must stay open to submit scheduled campaigns. Overdue schedules are processed when the workspace next starts. Queue counts and recipient states persist. The worker checks subscription and suppression before submission, spaces attempts per account, and uses exponential backoff for temporary SMTP failures. Submissions interrupted before acceptance was recorded are marked **uncertain** and need to be reconciled against the provider log before any deliberate resend.
+Keep the backend running to submit scheduled campaigns. The desktop window can be closed. Overdue schedules are processed when the backend next starts. Queue counts and recipient states persist. The worker checks subscription and suppression before submission, spaces attempts per account, and uses exponential backoff for temporary SMTP failures. Submissions interrupted before acceptance was recorded are marked **uncertain** and need to be reconciled against the provider log before any deliberate resend.
 
 ## Public HTTPS service
 
-Run this optional service on the **same host** as the desktop app, with access to the workspace database and its SQLite WAL files. Run it under a dedicated service identity with access only to the database directory it needs. Keep the files on a local disk.
+The backend also serves signup forms, unsubscribe links, and provider events at `http://127.0.0.1:3001` by default. These routes use the same backend database as the desktop API. To publish them, copy `backend/.env.example` to `backend/.env` if it does not already exist and set `PUBLIC_URL` to your HTTPS origin with no trailing slash. Set `PORT` to change the public listener port.
 
-```powershell
-cd backend
-npm ci
-Copy-Item .env.example .env
-npm start
-```
-
-Set `BULK_MAIL_DB_PATH` to the path displayed in the desktop Settings page, and set `PUBLIC_URL` to the HTTPS origin with no trailing slash. Place the service behind an HTTPS reverse proxy that forwards to `127.0.0.1:3001`. Use `TRUST_PROXY=1` only for a single trusted reverse proxy that overwrites forwarding headers. Exclude URL tokens in access logs or redact paths for unsubscribe, redirects, tracking pixels, and confirmations.
+Configure your HTTPS reverse proxy to forward to the public listener on port 3001. Keep the desktop API on port 3002 private. Use `TRUST_PROXY=1` only for a single trusted reverse proxy that overwrites forwarding headers. Exclude URL tokens in access logs or redact paths for unsubscribe, redirects, tracking pixels, and confirmations.
 
 - **Unsubscribe.** The email body links to a confirmation page. The mail headers support the one-click HTTPS POST. Sender identification, a business address, and unsubscribe information are added to every campaign. Ensure the provider’s DKIM signature covers both unsubscribe headers for one-click inbox support. [RFC 8058](https://www.rfc-editor.org/rfc/rfc8058.html)
 - **Tracking.** Turn on open pixels or click redirects in Settings before queuing a campaign. Messages identify when engagement tracking is active. Mail privacy features and automated link scanners can affect engagement counts.
@@ -51,19 +64,18 @@ SMTP acceptance is tracked as **submitted**. Confirmed delivery totals are popul
 
 Reports export to CSV, Excel, or PDF. Analytics and report date filters use UTC. Individual campaign statistics show submission outcomes and recorded engagement or delivery events. The Activity Logs and Notifications pages show workspace events.
 
-Use Settings to take an online SQLite backup or schedule daily backups while the app runs. The Super Admin can restore a backup created by the same schema version. Restore preserves newer suppression records, signs out all sessions, and cancels restored active campaigns to avoid duplicate sends. Backups contain personal data and account hashes, and the SMTP secrets remain encrypted for the original Windows profile. Store backups in an access-controlled folder.
+Use Settings to take an online SQLite backup or schedule daily backups while the backend runs. The Super Admin can restore a backup created by the same schema version. Restore preserves newer suppression records, signs out all sessions, and cancels restored active campaigns to avoid duplicate sends. Backups contain personal data and account hashes, and the SMTP secrets remain encrypted with the backend key. Store backups in an access-controlled folder.
 
 ## Verify and build
 
 ```powershell
-cd frontend
+cd backend
 npm test
+cd ../frontend
 npm run lint
 npm run make
-cd ../backend
-npm test
 ```
 
-On Windows x64, Forge bundles the Electron app and Electron Builder produces the NSIS installer at `frontend/dist/installer/Bulk-Mail-Sender-Pro-Setup-1.0.0-x64.exe`. The build requires access to the Electron and NSIS download sources on first use. The local build is unsigned. [Electron Builder NSIS documentation](https://www.electron.build/v26/docs/nsis/)
+On Windows x64, Forge bundles the Electron app and Electron Builder produces the NSIS installer at `frontend/dist/installer/Bulk-Mail-Sender-Pro-Setup-1.0.0-x64.exe`. The build requires access to the Electron and NSIS download sources on first use. The installer contains the Electron frontend. Run the separate backend on the same machine for the installed app to connect. The local build is unsigned. [Electron Builder NSIS documentation](https://www.electron.build/v26/docs/nsis/)
 
 The test suites use temporary or in-memory databases. SMTP, CAPTCHA, and confirmation delivery use injected test transports. No test sends a real campaign or requires real provider credentials.

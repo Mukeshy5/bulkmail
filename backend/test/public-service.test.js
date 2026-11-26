@@ -1,11 +1,11 @@
-const assert = require('node:assert/strict');
-const { test } = require('node:test');
-const { once } = require('node:events');
-const { createHmac } = require('node:crypto');
-const { createApp } = require('../index.js');
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { once } from 'node:events';
+import { createHmac } from 'node:crypto';
+import { createApp } from '../src/public-app.js';
 
 test('public unsubscribe, tracking, provider events, and double opt-in persist across requests', async (t) => {
-  const { openDatabase } = await import('../../frontend/src/main/database.js');
+  const { openDatabase } = await import('../src/database.js');
   const db = openDatabase(':memory:');
   const date = new Date().toISOString();
   const secret = 'example-webhook-secret-with-enough-length';
