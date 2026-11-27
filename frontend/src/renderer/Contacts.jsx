@@ -754,8 +754,6 @@ function SortHeader({ label, value, active, direction, onSort }) {
 function ContactEditor({ contact, onClose, onSaved }) {
   const [form, setForm] = useState(() => ({
     fullName: contact?.fullName || '',
-    firstName: contact?.firstName || '',
-    lastName: contact?.lastName || '',
     email: contact?.email || '',
     company: contact?.company || '',
     phone: contact?.phone || '',
@@ -768,7 +766,7 @@ function ContactEditor({ contact, onClose, onSaved }) {
     customFields: contact?.customFields
       ? JSON.stringify(contact.customFields)
       : '',
-    tags: contact?.tags?.join(', ') || '',
+    tags: contact?.tags || [],
     subscriptionStatus: contact?.subscriptionStatus || 'pending',
     consentSource: contact?.consentSource || '',
     consentAt: contact?.consentAt
@@ -777,7 +775,6 @@ function ContactEditor({ contact, onClose, onSaved }) {
   }));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const consentRequired = form.subscriptionStatus === 'subscribed';
 
   function update(event) {
     setForm({ ...form, [event.target.name]: event.target.value });
@@ -808,18 +805,6 @@ function ContactEditor({ contact, onClose, onSaved }) {
 
   const inputClass =
     'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100';
-  const fields = [
-    ['firstName', 'First name'],
-    ['lastName', 'Last name'],
-    ['company', 'Company'],
-    ['phone', 'Phone'],
-    ['country', 'Country'],
-    ['city', 'City'],
-    ['category', 'Category'],
-    ['source', 'Contact source'],
-    ['address', 'Address'],
-    ['tags', 'Tags (comma-separated)'],
-  ];
 
   return (
     <Modal
@@ -831,7 +816,7 @@ function ContactEditor({ contact, onClose, onSaved }) {
       <form className="mt-6" onSubmit={submit}>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="text-sm font-medium text-slate-700 sm:col-span-2">
-            Full name
+            Name
             <input
               className={inputClass}
               name="fullName"
@@ -841,19 +826,7 @@ function ContactEditor({ contact, onClose, onSaved }) {
               onChange={update}
             />
           </label>
-          {fields.slice(0, 2).map(([name, label]) => (
-            <label className="text-sm font-medium text-slate-700" key={name}>
-              {label}
-              <input
-                className={inputClass}
-                name={name}
-                maxLength={75}
-                value={form[name]}
-                onChange={update}
-              />
-            </label>
-          ))}
-          <label className="text-sm font-medium text-slate-700 sm:col-span-2">
+          <label className="text-sm font-medium text-slate-700">
             Email address
             <input
               className={inputClass}
@@ -861,98 +834,38 @@ function ContactEditor({ contact, onClose, onSaved }) {
               type="email"
               maxLength={254}
               required
+              placeholder="name@example.com"
               value={form.email}
               onChange={update}
             />
           </label>
-          {fields.slice(2).map(([name, label]) => (
-            <label className="text-sm font-medium text-slate-700" key={name}>
-              {label}
-              <input
-                className={inputClass}
-                name={name}
-                maxLength={
-                  name === 'phone'
-                    ? 50
-                    : name === 'company'
-                      ? 150
-                      : name === 'tags'
-                        ? 1600
-                        : name === 'address'
-                          ? 500
-                          : name === 'source'
-                            ? 150
-                            : 100
-                }
-                value={form[name]}
-                onChange={update}
-              />
-            </label>
-          ))}
-          <Field label="Custom fields (JSON)" wide>
-            <textarea
+          <label className="text-sm font-medium text-slate-700">
+            Company name
+            <input
               className={inputClass}
-              rows={3}
-              name="customFields"
-              value={form.customFields}
+              name="company"
+              maxLength={150}
+              required
+              value={form.company}
               onChange={update}
             />
-          </Field>
-          <label className="text-sm font-medium text-slate-700 sm:col-span-2">
-            Subscription status
-            <select
-              className={`${inputClass} bg-white`}
-              name="subscriptionStatus"
-              value={form.subscriptionStatus}
-              onChange={update}
-            >
-              {statusOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
           </label>
-          {consentRequired && (
-            <>
-              <label className="text-sm font-medium text-slate-700">
-                Consent source
-                <input
-                  className={inputClass}
-                  name="consentSource"
-                  maxLength={255}
-                  placeholder="e.g. Website signup form"
-                  required
-                  value={form.consentSource}
-                  onChange={update}
-                />
-              </label>
-              <Field wide label="Consent evidence">
-                <textarea
-                  className={inputClass}
-                  name="consentEvidence"
-                  maxLength={1000}
-                  value={form.consentEvidence}
-                  onChange={update}
-                />
-              </Field>
-              <label className="text-sm font-medium text-slate-700">
-                Consent date
-                <input
-                  className={inputClass}
-                  name="consentAt"
-                  type="date"
-                  required
-                  value={form.consentAt}
-                  onChange={update}
-                />
-              </label>
-            </>
-          )}
+          <label className="text-sm font-medium text-slate-700">
+            Phone number
+            <input
+              className={inputClass}
+              name="phone"
+              type="tel"
+              maxLength={50}
+              required
+              value={form.phone}
+              onChange={update}
+            />
+          </label>
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Imported and new contacts default to Pending consent. Subscribed
-          contacts require recorded consent.
+          New contacts default to Pending consent. Subscription and consent
+          records are preserved when editing a contact.
         </p>
         <p className="mt-3 min-h-5 text-sm text-rose-600" role="alert">
           {error}

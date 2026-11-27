@@ -1,16 +1,13 @@
-import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
-import {
-  importContacts,
-  previewContactImport,
-} from '../src/contact-import-service.js';
-import { createContact } from '../src/contacts-service.js';
-import { openDatabase } from '../src/database.js';
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
+import { importContacts, previewContactImport } from "../src/contact-import-service.js";
+import { createContact } from "../src/contacts-service.js";
+import { openDatabase } from "../src/database.js";
 
 const databases = [];
 
 function createTestDatabase() {
-  const database = openDatabase(':memory:');
+  const database = openDatabase(":memory:");
   databases.push(database);
   return database;
 }
@@ -21,70 +18,70 @@ afterEach(() => {
   }
 });
 
-test('CSV import previews columns and reports imported, duplicate, invalid, and suppressed rows', async () => {
+test("CSV import previews columns and reports imported, duplicate, invalid, and suppressed rows", async () => {
   const database = createTestDatabase();
   createContact(database, null, {
-    fullName: 'Suppressed Contact',
-    email: 'blocked@example.com',
-    subscriptionStatus: 'unsubscribed',
+    fullName: "Suppressed Contact",
+    email: "blocked@example.com",
+    company: "Example Company",
+    phone: "555-0100",
+    subscriptionStatus: "unsubscribed",
   });
   const fileData = new TextEncoder().encode(
     [
-      'Full Name,Email,Company',
-      'Alice Example,alice@example.com,Example Co',
-      'Duplicate Alice,alice@example.com,Example Co',
-      'Invalid Contact,not-an-email,Example Co',
-      'Suppressed Contact,blocked@example.com,Example Co',
-    ].join('\n'),
+      "Full Name,Email,Company",
+      "Alice Example,alice@example.com,Example Co",
+      "Duplicate Alice,alice@example.com,Example Co",
+      "Invalid Contact,not-an-email,Example Co",
+      "Suppressed Contact,blocked@example.com,Example Co",
+    ].join("\n"),
   );
   const input = {
-    fileName: 'contacts.csv',
+    fileName: "contacts.csv",
     fileData,
     mapping: {
-      fullName: 'Full Name',
-      email: 'Email',
-      company: 'Company',
+      fullName: "Full Name",
+      email: "Email",
+      company: "Company",
     },
   };
 
   const preview = await previewContactImport(input);
   const imported = await importContacts(database, null, input);
 
-  assert.deepEqual(preview.headers, ['Full Name', 'Email', 'Company']);
+  assert.deepEqual(preview.headers, ["Full Name", "Email", "Company"]);
   assert.equal(preview.totalRows, 4);
   assert.deepEqual(imported.report, {
-    filename: 'contacts.csv',
+    filename: "contacts.csv",
     totalRows: 4,
     imported: 1,
     duplicates: 1,
     invalid: 1,
     suppressed: 1,
     issues: [
-      { row: 3, reason: 'Duplicate email address.' },
-      { row: 4, reason: 'Enter a valid email address.' },
-      { row: 5, reason: 'Address is suppressed (unsubscribed).' },
+      { row: 3, reason: "Duplicate email address." },
+      { row: 4, reason: "Enter a valid email address." },
+      { row: 5, reason: "Address is suppressed (unsubscribed)." },
     ],
   });
 
   const contact = database
-    .prepare('SELECT subscription_status FROM contacts WHERE email = ?')
-    .get('alice@example.com');
-  assert.equal(contact.subscription_status, 'pending');
+    .prepare("SELECT subscription_status FROM contacts WHERE email = ?")
+    .get("alice@example.com");
+  assert.equal(contact.subscription_status, "pending");
 });
 
-test('import rejects unsupported formats and missing email mapping', async () => {
+test("import rejects unsupported formats and missing email mapping", async () => {
   const database = createTestDatabase();
-  const fileData = new TextEncoder().encode(
-    'Name,Email\nAlice,alice@example.com\n',
-  );
+  const fileData = new TextEncoder().encode("Name,Email\nAlice,alice@example.com\n");
   const unsupported = await previewContactImport({
-    fileName: 'contacts.xls',
+    fileName: "contacts.xls",
     fileData,
   });
   const unmapped = await importContacts(database, null, {
-    fileName: 'contacts.csv',
+    fileName: "contacts.csv",
     fileData,
-    mapping: { fullName: 'Name' },
+    mapping: { fullName: "Name" },
   });
 
   assert.equal(unsupported.ok, false);
