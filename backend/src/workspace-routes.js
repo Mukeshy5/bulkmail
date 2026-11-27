@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { sanitizeEmailMarkup } from './email-design.js';
+import { portableHtml } from './email-media-service.js';
 import { stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { exportReport } from './export-service.js';
@@ -108,7 +110,7 @@ export function registerWorkspaceRoutes(
     if (
       db
         .prepare(
-          "SELECT 1 FROM activity_log WHERE actor_user_id = ? AND action = 'campaign.test' AND created_at >= ?",
+          "SELECT 1 FROM activity_log WHERE actor_user_id = ? AND action IN ('campaign.test','template.test') AND created_at >= ?",
         )
         .get(user.id, since)
     ) {
@@ -293,17 +295,25 @@ export function registerWorkspaceRoutes(
       return failed('Choose a SQLite backup file.');
     return restoreWithWorker(() => restoreBackup(db, filename));
   });
-  handle('exportTemplate', read, (id) => {
+  handle('exportTemplate', read, async (id) => {
     const template = db
       .prepare('SELECT name, html_body FROM email_templates WHERE id = ?')
       .get(id);
     if (!template) return failed('Template not found.');
+    let html;
+    try {
+      html = await portableHtml(db, sanitizeEmailMarkup(template.html_body));
+    } catch {
+      return failed(
+        'An embedded image is missing or the email contains more than 12 MB of images.',
+      );
+    }
     return {
       ok: true,
       file: {
         name: template.name.replace(/[^a-z0-9-]/gi, '-') + '.html',
         format: 'html',
-        text: template.html_body,
+        text: html,
       },
     };
   });

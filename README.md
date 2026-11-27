@@ -53,6 +53,12 @@ The migration snapshots the old SQLite file, upgrades the copy under `backend/da
 
 Keep the backend running to submit scheduled campaigns. The desktop window can be closed. Overdue schedules are processed when the backend next starts. Queue counts and recipient states persist. The worker checks subscription and suppression before submission, spaces attempts per account, and uses exponential backoff for temporary SMTP failures. Submissions interrupted before acceptance was recorded are marked **uncertain** and need to be reconciled against the provider log before any deliberate resend.
 
+## Template library and email builder
+
+Templates, drafts, favorites, and version history are stored in SQLite. The builder can import HTML and export a standalone HTML file with uploaded images embedded. Uploaded media is stored in the `media` directory next to the backend database. Keep that directory with the SQLite backup when transferring a workspace. Deleting an image from the library archives the asset so older designs and campaign snapshots can still use it.
+
+Use **Check email** to find missing links, image sources, alt text, or an unsubscribe link. **Check live URLs** makes HEAD requests to up to 12 public HTTP(S) destinations and reports redirects or inconclusive responses separately. Test messages use the selected verified SMTP account and the single recipient entered in the dialog.
+
 ## Public HTTPS service
 
 The backend also serves signup forms, unsubscribe links, and provider events at `http://127.0.0.1:3001` by default. These routes use the same backend database as the desktop API. To publish them, copy `backend/.env.example` to `backend/.env` if it does not already exist and set `PUBLIC_URL` to your HTTPS origin with no trailing slash. Set `PORT` to change the public listener port.
@@ -71,7 +77,7 @@ SMTP acceptance is tracked as **submitted**. Confirmed delivery totals are popul
 
 Reports export to CSV, Excel, or PDF. Analytics and report date filters use UTC. Individual campaign statistics show submission outcomes and recorded engagement or delivery events. The Activity Logs and Notifications pages show workspace events.
 
-Use Settings to take an online SQLite backup or schedule daily backups while the backend runs. The Super Admin can restore a backup created by the same schema version. Restore preserves newer suppression records, signs out all sessions, and cancels restored active campaigns to avoid duplicate sends. Backups contain personal data and account hashes, and the SMTP secrets remain encrypted with the backend key. Store backups in an access-controlled folder.
+Use Settings to take an online SQLite backup or schedule daily backups while the backend runs. The Super Admin can restore a backup from a supported earlier version or the current version. Restore preserves newer suppression records, signs out all sessions, and cancels restored active campaigns to avoid duplicate sends. Backups contain personal data and account hashes, and the SMTP secrets remain encrypted with the backend key. Store backups and the media directory in an access-controlled folder.
 
 ## Verify and build
 

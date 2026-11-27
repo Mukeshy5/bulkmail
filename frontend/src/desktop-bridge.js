@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Notification,
@@ -74,10 +75,25 @@ const forwarded = [
   'smtp-accounts:set-default',
   'smtp-accounts:test',
   'email-templates:list',
+  'email-templates:get',
   'email-templates:create',
   'email-templates:update',
   'email-templates:duplicate',
   'email-templates:delete',
+  'email-templates:favorite',
+  'email-templates:versions',
+  'email-templates:restore-version',
+  'email-templates:render',
+  'email-templates:link',
+  'email-templates:inspect',
+  'email-templates:portable',
+  'email-templates:export-html',
+  'email-templates:test',
+  'email-media:list',
+  'email-media:get',
+  'email-media:upload',
+  'email-media:crop',
+  'email-media:delete',
   'campaigns:list',
   'campaigns:get',
   'campaigns:create',
@@ -89,6 +105,7 @@ const exportChannels = new Set([
   'contacts:export',
   'workspace:exportReport',
   'workspace:exportTemplate',
+  'email-templates:export-html',
 ]);
 const imports = new Set(['contacts:import', 'contacts:preview-import']);
 const maxImportBytes = 10 * 1024 * 1024;
@@ -97,6 +114,14 @@ const cancelled = { ok: false, cancelled: true };
 const sqliteFilter = [
   { name: 'SQLite database', extensions: ['sqlite', 'sqlite3', 'db'] },
 ];
+
+function byteBuffer(value) {
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (ArrayBuffer.isView(value) && value.BYTES_PER_ELEMENT === 1) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return null;
+}
 
 function desktopOrigin() {
   const configured =
@@ -286,13 +311,43 @@ export function registerDesktopBridge(getWindow) {
     return { ok: true };
   });
 
+  handle('desktop:open-email-link', async (input) => {
+    const result = await call('email-templates:link', input);
+    if (!result.ok || !result.url)
+      return failed('Enter a valid link destination.');
+    const destination = new URL(result.url);
+    if (!['http:', 'https:', 'mailto:', 'tel:'].includes(destination.protocol))
+      return failed('Unsupported link destination.');
+    await shell.openExternal(destination.href);
+    return { ok: true };
+  });
+  handle('desktop:copy-email-html', async (input) => {
+    const result = await call('email-templates:portable', input);
+    if (!result.ok) return result;
+    clipboard.writeText(result.html);
+    return { ok: true };
+  });
+
   for (const name of forwarded) {
     handle(name, async (input) => {
-      if (imports.has(name)) {
-        const bytes = input?.fileData;
-        if (!(bytes instanceof Uint8Array) || bytes.byteLength > maxImportBytes)
+      if (name === 'email-media:upload') {
+        const bytes = byteBuffer(input?.fileData);
+        if (!bytes)
+          return failed(
+            'The image data could not be read. Choose the file again.',
+          );
+        if (bytes.byteLength > 5 * 1024 * 1024)
+          return failed('Choose a JPG, PNG, GIF, or WebP image up to 5 MB.');
+        input = { ...input, fileData: bytes.toString('base64') };
+      } else if (imports.has(name)) {
+        const bytes = byteBuffer(input?.fileData);
+        if (!bytes)
+          return failed(
+            'The selected file could not be read. Choose it again.',
+          );
+        if (bytes.byteLength > maxImportBytes)
           return failed('Choose a CSV or XLSX file up to 10 MB.');
-        input = { ...input, fileData: Buffer.from(bytes).toString('base64') };
+        input = { ...input, fileData: bytes.toString('base64') };
       }
       if (name === 'workspace:chooseBackupFolder') {
         const choice = await dialog.showOpenDialog(getWindow(), {

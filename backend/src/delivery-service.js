@@ -4,20 +4,14 @@ import sanitizeHtml from 'sanitize-html';
 import { campaignAudience, resolveAudience } from './audience-service.js';
 import { notify, recordActivity, settings } from './operations.js';
 import { createAccountTransport } from './smtp-service.js';
+import { escapeHtml, sanitizeEmailMarkup } from './email-design.js';
+import { mediaAttachments } from './email-media-service.js';
+
+export { escapeHtml } from './email-design.js';
 
 const token = () => randomBytes(24).toString('base64url');
 const nowIso = () => new Date().toISOString();
 const problem = (error) => ({ ok: false, error });
-
-export function escapeHtml(value) {
-  return String(value).replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        c
-      ],
-  );
-}
 
 export function personalize(source, contact, unsubscribe, html = false) {
   const fields = {
@@ -27,6 +21,8 @@ export function personalize(source, contact, unsubscribe, html = false) {
     email: '',
     company: '',
     country: '',
+    phone: '',
+    current_date: new Date().toLocaleDateString('en-CA'),
     unsubscribe_url: unsubscribe,
   };
   return source.replace(
@@ -122,7 +118,10 @@ function deliveryConfig(db, campaign, test = false) {
     content: {
       subject,
       html,
-      text: campaign.custom_html ? '' : template?.text_body || '',
+      text:
+        campaign.custom_html && campaign.custom_html !== template?.html_body
+          ? ''
+          : template?.text_body || '',
       previewText: campaign.preview_text,
       address: config.businessAddress,
       sender: campaign.sender_name || account.sender_name,
@@ -312,30 +311,12 @@ function trackedHtml(db, delivery, recipient, unsubscribe, html) {
   return html;
 }
 
-function message(db, delivery, contact, recipient = null) {
+async function message(db, delivery, contact, recipient = null) {
   const unsubscribe = recipient
     ? delivery.publicUrl + '/u/' + recipient.token
     : '#unsubscribe-test';
-  let html = sanitizeHtml(
+  let html = sanitizeEmailMarkup(
     personalize(delivery.html, contact, unsubscribe, true),
-    {
-      allowedTags: [
-        ...sanitizeHtml.defaults.allowedTags,
-        'img',
-        'center',
-        'font',
-      ],
-      allowedAttributes: {
-        '*': ['style', 'align', 'valign', 'width', 'height', 'bgcolor'],
-        a: ['href', 'title'],
-        img: ['src', 'alt', 'title'],
-        table: ['role', 'cellpadding', 'cellspacing', 'border'],
-        td: ['colspan', 'rowspan'],
-        font: ['color', 'size', 'face'],
-      },
-      allowedSchemes: ['http', 'https', 'mailto', 'tel'],
-      allowProtocolRelative: false,
-    },
   );
   if (delivery.previewText) {
     html =
@@ -362,8 +343,10 @@ function message(db, delivery, contact, recipient = null) {
   html += footer;
   const text =
     delivery.text ||
-    delivery.html
-      .replace(/<[^>]*>/g, ' ')
+    sanitizeHtml(
+      delivery.html.replace(/<\/(?:h[1-6]|p|div|td|li)>|<br\s*\/?>/gi, ' '),
+      { allowedTags: [], allowedAttributes: {} },
+    )
       .replace(/\s+/g, ' ')
       .trim();
   return {
@@ -384,6 +367,8 @@ function message(db, delivery, contact, recipient = null) {
       unsubscribe +
       disclosure,
     html,
+    attachments: await mediaAttachments(db, html),
+    attachDataUrls: true,
     messageId: recipient
       ? '<' + recipient.id + '@' + delivery.from.split('@')[1] + '>'
       : undefined,
@@ -401,17 +386,83 @@ export async function sendCampaignTest(db, id, userEmail, options) {
   if (!campaign) return problem('Campaign not found.');
   const config = deliveryConfig(db, campaign, true);
   if (!config.ok) return config;
+  return submitTest(
+    db,
+    config,
+    { email: userEmail, first_name: 'Test' },
+    options,
+  );
+}
+
+export async function sendTemplateTest(db, input, options) {
+  const email =
+    typeof input?.recipient === 'string'
+      ? input.recipient.trim().toLowerCase()
+      : '';
+  const subject =
+    typeof input?.subject === 'string' ? input.subject.trim() : '';
+  const html = typeof input?.html === 'string' ? input.html : '';
+  if (
+    email.length > 254 ||
+    !/^[^\s@<>,";]+@(?:[a-z0-9-]+\.)+[a-z0-9-]{2,}$/i.test(email)
+  )
+    return problem('Enter one valid test recipient email.');
+  if (
+    !subject ||
+    subject.length > 200 ||
+    /\p{Cc}/u.test(subject) ||
+    !html.trim() ||
+    Buffer.byteLength(html) > 500 * 1024
+  )
+    return problem('Enter a subject and HTML content up to 500 KB.');
+  const id =
+    typeof input.smtpAccountId === 'string' && input.smtpAccountId
+      ? input.smtpAccountId
+      : null;
+  const config = deliveryConfig(
+    db,
+    {
+      smtp_account_id: id,
+      template_id: null,
+      custom_html: html,
+      subject,
+      preview_text: '',
+      sender_name: '',
+      sender_email: '',
+      reply_to_email: '',
+    },
+    true,
+  );
+  if (!config.ok) return config;
+  if (
+    typeof input.text === 'string' &&
+    Buffer.byteLength(input.text) <= 200 * 1024
+  )
+    config.content.text = input.text;
+  return submitTest(
+    db,
+    config,
+    {
+      email,
+      first_name: 'Alex',
+      last_name: 'Morgan',
+      full_name: 'Alex Morgan',
+      company: 'Example Company',
+      phone: '+1 202 555 0144',
+    },
+    options,
+  );
+}
+
+async function submitTest(db, config, contact, options) {
   let transport;
   try {
+    const email = await message(db, config.content, contact);
     transport = smtpTransport(
       config.account,
       options.decrypt,
       options.createTransport ?? nodemailer.createTransport,
     );
-    const email = message(db, config.content, {
-      email: userEmail,
-      first_name: 'Test',
-    });
     const result = await transport.sendMail({
       ...email,
       subject: '[Test] ' + email.subject,
@@ -641,7 +692,7 @@ export function createDeliveryWorker(
     try {
       transport = smtpTransport(account, decrypt, createTransport);
       const result = await transport.sendMail(
-        message(db, config, claim, recipient),
+        await message(db, config, claim, recipient),
       );
       if (result.accepted?.length !== 1) {
         outcome = 'failed';

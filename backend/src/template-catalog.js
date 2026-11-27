@@ -125,6 +125,18 @@ const categories = {
   ],
 };
 const colors = ['#1e3a8a', '#253768', '#294792', '#263761', '#155974'];
+const templateCategory = {
+  'template-follow-up': 'Follow-up Email',
+  'template-promotion': 'Promotional',
+  'template-product': 'Product Launch',
+  'special-discount': 'Offers & Discounts',
+  'template-event': 'Event Invitation',
+  'webinar-invitation': 'Event Invitation',
+  'conference-announcement': 'Event Invitation',
+  'template-welcome': 'Welcome Email',
+  'thank-you-email': 'Transactional Emails',
+  'customer-update': 'Transactional Emails',
+};
 
 export function seedTemplateCatalog(db) {
   const now = new Date().toISOString();
@@ -160,7 +172,7 @@ export function seedTemplateCatalog(db) {
             '\n\nUnsubscribe: {{unsubscribe_url}}',
           now,
           now,
-          category,
+          templateCategory[id] || category,
         );
       }
     });

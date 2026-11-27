@@ -143,7 +143,7 @@ function validateDraft(database, input) {
     ) ||
     previewText.length > 250 ||
     hasHeaderControls(previewText) ||
-    customHtml.length > 500000
+    Buffer.byteLength(customHtml) > 500 * 1024
   ) {
     return {
       ok: false,

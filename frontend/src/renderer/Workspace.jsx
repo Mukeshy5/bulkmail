@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   Activity as ActivityIcon,
   BarChart3,
@@ -29,14 +29,15 @@ import {
 import Contacts from './Contacts.jsx';
 import ContactLists from './ContactLists.jsx';
 import Campaigns from './Campaigns.jsx';
-import EmailTemplates from './EmailTemplates.jsx';
-import EmailBuilder from './EmailBuilder.jsx';
 import SmtpAccounts from './SmtpAccounts.jsx';
 import Analytics, { Reports } from './Analytics.jsx';
 import { Segments, SignupForms, Suppression } from './AudiencePages.jsx';
 import { Activity, Notifications, Settings, Users } from './AdminPages.jsx';
 import { Modal, useToast } from './ui.jsx';
 import { Action, call, useQuery } from './workspace-ui.jsx';
+
+const EmailTemplates = lazy(() => import('./EmailTemplates.jsx'));
+const EmailBuilder = lazy(() => import('./EmailBuilder.jsx'));
 
 const groups = [
   [
@@ -264,10 +265,29 @@ export default function Workspace({ user, onSignOut }) {
           )}
           {page === 'segments' && <Segments canEdit={canEdit} />}
           {page === 'templates' && (
-            <EmailTemplates canEdit={canEdit} navigate={navigate} />
+            <Suspense
+              fallback={<p className="studio-empty">Loading templates…</p>}
+            >
+              <EmailTemplates
+                canEdit={canEdit}
+                canSend={canSend}
+                userEmail={user.email}
+                navigate={navigate}
+              />
+            </Suspense>
           )}
           {page === 'builder' && (
-            <EmailBuilder id={action} canEdit={canEdit} navigate={navigate} />
+            <Suspense
+              fallback={<p className="studio-empty">Loading email builder…</p>}
+            >
+              <EmailBuilder
+                id={action}
+                canEdit={canEdit}
+                canSend={canSend}
+                userEmail={user.email}
+                navigate={navigate}
+              />
+            </Suspense>
           )}
           {page === 'forms' && <SignupForms canEdit={canEdit} />}
           {['campaigns', 'schedule'].includes(page) && (

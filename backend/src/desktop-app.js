@@ -40,13 +40,7 @@ import {
   testSmtpAccount,
   updateSmtpAccount,
 } from './smtp-service.js';
-import {
-  createEmailTemplate,
-  deleteEmailTemplate,
-  duplicateEmailTemplate,
-  listEmailTemplates,
-  updateEmailTemplate,
-} from './email-template-service.js';
+import { registerTemplateStudio } from './template-studio-routes.js';
 import {
   createCampaignDraft,
   deleteCampaignDraft,
@@ -69,6 +63,7 @@ const authOperations = new Set([
 const importOperations = new Set([
   'contacts:preview-import',
   'contacts:import',
+  'email-media:upload',
 ]);
 const maxImportBytes = 10 * 1024 * 1024;
 const bearer = /^Bearer ([a-zA-Z0-9_-]{43})$/;
@@ -230,19 +225,7 @@ export function createDesktopApp(
     }
   });
 
-  register('email-templates:list', read, () => listEmailTemplates(db));
-  register('email-templates:create', edit, (input, user) =>
-    createEmailTemplate(db, user.id, input),
-  );
-  register('email-templates:update', edit, ({ id, input }, user) =>
-    updateEmailTemplate(db, user.id, id, input),
-  );
-  register('email-templates:duplicate', edit, (id, user) =>
-    duplicateEmailTemplate(db, user.id, id),
-  );
-  register('email-templates:delete', edit, (id, user) =>
-    deleteEmailTemplate(db, user.id, id),
-  );
+  registerTemplateStudio(register, db, decrypt);
 
   register('campaigns:list', read, (search) => listCampaigns(db, search));
   register('campaigns:get', read, (id) => getCampaign(db, id));

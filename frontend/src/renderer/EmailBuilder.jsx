@@ -1,675 +1,866 @@
-import { useEffect, useState } from 'react';
-import { GripVertical, Monitor, Smartphone, Tablet } from 'lucide-react';
-import EmailPreviewFrame from './EmailPreview.jsx';
-import { PageHeading, useToast } from './ui.jsx';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  Check,
+  ClipboardPaste,
+  Code2,
+  Copy,
+  Download,
+  Eye,
+  History,
+  Minus,
+  Plus,
+  Redo2,
+  Save,
+  Send,
+  ShieldCheck,
+  Undo2,
+  Upload,
+  TriangleAlert,
+} from 'lucide-react';
+import { Modal, useToast } from './ui.jsx';
 import { Action, ErrorText, Field } from './workspace-ui.jsx';
+import {
+  EmailCanvas,
+  ElementPalette,
+  Inspector,
+} from './EmailStudioCanvas.jsx';
+import {
+  ChecksDialog,
+  DeviceButtons,
+  HistoryDialog,
+  LinkDialog,
+  MediaLibrary,
+  PreviewDialog,
+  TestDialog,
+} from './EmailStudioDialogs.jsx';
+import {
+  blockLabels,
+  campaignTemplate,
+  categories,
+  devices,
+  imageKinds,
+  mediaRequest,
+  newBlock,
+  readHtmlFile,
+  studioRequest,
+  templateDraft,
+} from './email-studio-model.js';
 
-export const categories = [
-  'General',
-  'Business',
-  'Marketing',
-  'Newsletter',
-  'Events',
-  'Customer Communication',
-];
-const names = {
-  heading: 'Heading',
-  paragraph: 'Paragraph',
-  image: 'Image',
-  button: 'Button',
-  divider: 'Divider',
-  spacer: 'Spacer',
-  social: 'Social links',
-  logo: 'Logo',
-  two: 'Two columns',
-  three: 'Three columns',
-  html: 'HTML',
-  footer: 'Footer',
-  unsubscribe: 'Unsubscribe link',
-};
-const copy = {
-  heading: 'A clear heading',
-  paragraph: 'Hello {{first_name | default: "there"}},',
-  button: 'Learn more',
-  image: 'Image description',
-  logo: 'Logo',
-  two: 'Column one',
-  three: 'Column one',
-  footer: 'Your company · Your address',
-  unsubscribe: 'Unsubscribe',
-};
-const devices = [
-  ['Desktop', 620, Monitor],
-  ['Tablet', 520, Tablet],
-  ['Mobile', 320, Smartphone],
-];
-const newBlock = (type, content = copy[type] || '') => ({
-  id: crypto.randomUUID(),
-  type,
-  content,
-  second: 'Column two',
-  third: 'Column three',
-  color: '#182b4b',
-  background: '#ffffff',
-  buttonColor: '#315be8',
-  url: '',
-  url2: '',
-  url3: '',
-  align: 'left',
-  padding: 20,
-  margin: 0,
-  radius: 6,
-  font: type === 'heading' ? 28 : 16,
-  family: 'Arial',
-});
-const escape = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (char) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        char
-      ],
-  );
-const bounded = (value, max) => Math.max(0, Math.min(max, Number(value) || 0));
-const hex = (color, fallback) =>
-  /^#[a-f0-9]{6}$/i.test(color) ? color : fallback;
-const fonts = ['Arial', 'Georgia', 'Verdana', 'Tahoma'];
-const href = (value) => (/^https?:\/\//i.test(value) ? escape(value) : '#');
-
-function renderBlock(block) {
-  const { type } = block;
-  const body = escape(block.content).replace(/\n/g, '<br>');
-  switch (type) {
-    case 'heading':
-      return '<h1 style="font-size:inherit;margin:0">' + body + '</h1>';
-    case 'paragraph':
-    case 'footer':
-      return '<p style="margin:0">' + body + '</p>';
-    case 'image':
-    case 'logo':
-      return href(block.url) === '#'
-        ? '<span>' + body + '</span>'
-        : '<img src="' +
-            href(block.url) +
-            '" alt="' +
-            escape(block.content) +
-            '" width="' +
-            (type === 'logo' ? 140 : 560) +
-            '" style="max-width:100%;height:auto;display:inline-block;border:0">';
-    case 'button':
-      return (
-        '<a href="' +
-        href(block.url) +
-        '" style="display:inline-block;padding:12px 20px;text-decoration:none;color:#ffffff;border-radius:' +
-        bounded(block.radius, 50) +
-        'px;background:' +
-        hex(block.buttonColor, '#315be8') +
-        '">' +
-        body +
-        '</a>'
-      );
-    case 'divider':
-      return '<hr style="margin:0;border:0;border-top:1px solid #d8e1ee">';
-    case 'spacer':
-      return (
-        '<div style="height:' + bounded(block.font, 100) + 'px">&nbsp;</div>'
-      );
-    case 'social':
-      return (
-        [
-          ['LinkedIn', block.url],
-          ['Instagram', block.url2],
-          ['Facebook', block.url3],
-        ]
-          .filter(([, url]) => href(url) !== '#')
-          .map(
-            ([name, url]) =>
-              '<a style="margin-right:14px" href="' +
-              href(url) +
-              '">' +
-              name +
-              '</a>',
-          )
-          .join(' ') || '<span>Social links</span>'
-      );
-    case 'two':
-    case 'three': {
-      const values =
-        type === 'two'
-          ? [block.content, block.second]
-          : [block.content, block.second, block.third];
-      return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
-        values
-          .map(
-            (value) =>
-              '<td valign="top" width="' +
-              Math.floor(100 / values.length) +
-              '%" style="padding:0 8px;word-break:break-word">' +
-              escape(value).replace(/\n/g, '<br>') +
-              '</td>',
-          )
-          .join('') +
-        '</tr></table>'
-      );
-    }
-    case 'unsubscribe':
-      return '<a href="{{unsubscribe_url}}">' + body + '</a>';
-    case 'html':
-      return block.content;
-    default:
-      return '';
-  }
-}
-
-function emailHtml(blocks) {
-  return (
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#edf2f9"><tr><td align="center" style="padding:12px 4px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff">' +
-    blocks
-      .map((block) => {
-        const align = ['center', 'right'].includes(block.align)
-          ? block.align
-          : 'left';
-        const family = fonts.includes(block.family) ? block.family : 'Arial';
-        return (
-          '<tr><td style="padding-top:' +
-          bounded(block.margin, 80) +
-          'px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="' +
-          align +
-          '" style="border-radius:' +
-          bounded(block.radius, 50) +
-          'px;padding:' +
-          bounded(block.padding, 80) +
-          'px;font-family:' +
-          family +
-          ',sans-serif;font-size:' +
-          bounded(block.font, 100) +
-          'px;color:' +
-          hex(block.color, '#182b4b') +
-          ';background:' +
-          hex(block.background, '#ffffff') +
-          '">' +
-          renderBlock(block) +
-          '</td></tr></table></td></tr>'
-        );
-      })
-      .join('') +
-    '</table></td></tr></table>'
-  );
-}
-
-export default function EmailBuilder({ id, canEdit, navigate }) {
-  const [template, setTemplate] = useState({
-    name: '',
-    subject: '',
-    category: 'General',
-    description: '',
+const signature = (document) =>
+  JSON.stringify({
+    ...document,
+    meta: { ...document.meta, status: undefined },
   });
-  const [history, setHistory] = useState({ past: [], current: [], next: [] });
+let clipboardBlock;
+
+export default function EmailBuilder({
+  id,
+  canEdit,
+  canSend,
+  userEmail,
+  navigate,
+}) {
+  const [history, setHistory] = useState(() => ({
+    past: [],
+    present: templateDraft(),
+    next: [],
+  }));
   const [selected, setSelected] = useState(null);
-  const [width, setWidth] = useState(620);
-  const [showRemoteImages, setShowRemoteImages] = useState(false);
-  const [drag, setDrag] = useState('');
+  const [inspectorTab, setInspectorTab] = useState('block');
+  const [device, setDevice] = useState('Desktop');
+  const [zoom, setZoom] = useState(100);
+  const [remote, setRemote] = useState(false);
+  const [ready, setReady] = useState(!id);
+  const [autosave, setAutosave] = useState(true);
+  const [savedHash, setSavedHash] = useState(() => signature(templateDraft()));
+  const [record, setRecord] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [dialog, setDialog] = useState(null);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [conflicted, setConflicted] = useState(false);
+  const [, refreshClipboard] = useState(0);
+  const currentRecord = useRef(null);
+  const pending = useRef(null);
+  const htmlInput = useRef(null);
+  const attemptedAutosave = useRef('');
   const toast = useToast();
-  const blocks = history.current;
-  const block = blocks.find((item) => item.id === selected);
-  const html = emailHtml(blocks);
+  const { design, meta, designSettings } = history.present;
+  const currentHash = signature(history.present);
+  const dirty = currentHash !== savedHash;
+  const block = design.find((item) => item.id === selected);
+  const baseWidth = Math.min(
+    820,
+    Math.max(320, Number(designSettings.width || 600)),
+  );
+  const width = Math.min(baseWidth, devices[device] || baseWidth);
+
+  function load(template, makeCopy = false) {
+    const base = templateDraft(template);
+    const editable = !(makeCopy && template.isSystem);
+    if (!editable)
+      base.meta = {
+        ...base.meta,
+        name: (base.meta.name + ' copy').slice(0, 100),
+        status: 'draft',
+      };
+    const nextRecord = editable
+      ? {
+          id: template.id,
+          revision: template.revision,
+          status: template.status,
+        }
+      : null;
+    currentRecord.current = nextRecord;
+    setRecord(nextRecord);
+    setHistory({ past: [], present: base, next: [] });
+    setSavedHash(signature(base));
+    setSelected(null);
+    setReady(true);
+    setError('');
+    setConflicted(false);
+  }
 
   useEffect(() => {
-    if (!id) return;
     let active = true;
-    window.bulkMail.emailTemplates
-      .list()
-      .then((result) => {
-        if (!active) return;
-        const item = result.templates.find((entry) => entry.id === id);
-        if (!item) {
-          setError('Template not found.');
-          return;
-        }
-        setTemplate(
-          item.isSystem
-            ? {
-                ...item,
-                id: undefined,
-                name: (item.name + ' copy').slice(0, 100),
-                isSystem: false,
-              }
-            : item,
-        );
-        setHistory({
-          past: [],
-          current: item.design || [newBlock('html', item.htmlBody)],
-          next: [],
+    if (typeof id === 'string') {
+      studioRequest('get', id)
+        .then((result) => {
+          if (active) load(result.template, canEdit);
+        })
+        .catch((cause) => {
+          if (active) {
+            setError(cause.message);
+            setReady(true);
+          }
         });
-      })
-      .catch((cause) => {
-        if (active) setError(cause.message);
-      });
+    }
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, canEdit]);
 
-  function commit(value) {
-    setHistory((old) => ({
-      past: [...old.past.slice(-49), old.current],
-      current: value(old.current),
-      next: [],
-    }));
-  }
-
-  function add(type, index = blocks.length, content) {
-    if (!canEdit || !names[type] || blocks.length >= 100) return;
-    const item = newBlock(type, content);
-    commit((current) => [
-      ...current.slice(0, index),
-      item,
-      ...current.slice(index),
-    ]);
-    setSelected(item.id);
-  }
-
-  function move(id, index) {
-    const currentIndex = blocks.findIndex((item) => item.id === id);
-    if (currentIndex < 0) return;
-    commit((current) => {
-      const result = [...current];
-      const [element] = result.splice(currentIndex, 1);
-      result.splice(index, 0, element);
-      return result;
+  const commit = (edit) =>
+    setHistory((state) => {
+      const next = edit(state.present);
+      if (next === state.present) return state;
+      return {
+        past: [...state.past.slice(-59), state.present],
+        present: next,
+        next: [],
+      };
     });
-    setSelected(id);
-  }
-
-  function drop(e, index) {
-    e.preventDefault();
-    e.stopPropagation();
-    setDrag('');
-    if (!canEdit) return;
-    const type = e.dataTransfer.getData('block/type');
-    const moving = e.dataTransfer.getData('block/id');
-    if (type) add(type, index);
-    if (moving) move(moving, Math.min(index, blocks.length - 1));
-  }
-
-  function update(key, value) {
-    commit((current) =>
-      current.map((item) =>
-        item.id === selected ? { ...item, [key]: value } : item,
-      ),
+  function undo() {
+    setHistory((state) =>
+      state.past.length
+        ? {
+            past: state.past.slice(0, -1),
+            present: state.past.at(-1),
+            next: [state.present, ...state.next],
+          }
+        : state,
     );
   }
-
-  async function save(e) {
-    e.preventDefault();
-    setError('');
-    if (!blocks.length) {
-      setError('Add an element before saving.');
+  function redo() {
+    setHistory((state) =>
+      state.next.length
+        ? {
+            past: [...state.past, state.present],
+            present: state.next[0],
+            next: state.next.slice(1),
+          }
+        : state,
+    );
+  }
+  function select(id) {
+    setSelected(id);
+    setInspectorTab('block');
+  }
+  function patch(id, value) {
+    commit((state) => ({
+      ...state,
+      design: state.design.map((item) =>
+        item.id === id ? { ...item, ...value } : item,
+      ),
+    }));
+  }
+  function editMeta(key, value) {
+    commit((state) => ({ ...state, meta: { ...state.meta, [key]: value } }));
+  }
+  function insert(type, index, values = {}) {
+    if (!canEdit || !blockLabels[type] || design.length >= 100) return;
+    const item = newBlock(type, values);
+    commit((state) => ({
+      ...state,
+      design: [
+        ...state.design.slice(0, index),
+        item,
+        ...state.design.slice(index),
+      ],
+    }));
+    select(item.id);
+  }
+  function move(id, position) {
+    const from = design.findIndex((item) => item.id === id);
+    if (
+      from === -1 ||
+      from === position ||
+      position < 0 ||
+      position >= design.length
+    )
+      return;
+    commit((state) => {
+      const next = [...state.design];
+      const [item] = next.splice(from, 1);
+      next.splice(position, 0, item);
+      return { ...state, design: next };
+    });
+    select(id);
+  }
+  function duplicate(item) {
+    const { id, ...values } = item;
+    insert(item.type, design.findIndex((entry) => entry.id === id) + 1, values);
+  }
+  function remove(id) {
+    commit((state) => ({
+      ...state,
+      design: state.design.filter((item) => item.id !== id),
+    }));
+    if (selected === id) setSelected(null);
+  }
+  function copy() {
+    if (!block) return;
+    clipboardBlock = { ...block };
+    refreshClipboard((value) => value + 1);
+    toast('Block copied.');
+  }
+  function paste() {
+    if (!clipboardBlock || !canEdit) return;
+    const values = { ...clipboardBlock };
+    delete values.id;
+    const index = block
+      ? design.findIndex((item) => item.id === block.id) + 1
+      : design.length;
+    insert(values.type, index, values);
+  }
+  async function importHtml(file) {
+    try {
+      insert('html', design.length, { content: await readHtmlFile(file) });
+      setError('');
+    } catch (cause) {
+      setError(cause.message);
+    }
+  }
+  async function onDrop(event, index) {
+    const media = event.dataTransfer.files[0];
+    if (media) {
+      try {
+        if (/\.html?$/i.test(media.name)) {
+          insert('html', index, { content: await readHtmlFile(media) });
+        } else {
+          if (media.size > 5 * 1024 * 1024)
+            throw new Error('Choose an image up to 5 MB.');
+          const result = await mediaRequest('upload', {
+            name: media.name,
+            fileData: new Uint8Array(await media.arrayBuffer()),
+          });
+          insert('image', index, {
+            mediaId: result.media.id,
+            imageWidth: Math.min(560, result.media.width),
+          });
+        }
+      } catch (cause) {
+        setError(cause.message);
+      }
       return;
     }
-    setBusy(true);
+    const type = event.dataTransfer.getData('application/x-email-element');
+    const id = event.dataTransfer.getData('application/x-email-block');
+    if (type) insert(type, index);
+    if (id) {
+      const oldIndex = design.findIndex((item) => item.id === id);
+      if (oldIndex >= 0) move(id, Math.min(index, design.length - 1));
+    }
+  }
+
+  async function save(status, auto = false) {
+    if (!canEdit) return null;
+    if (conflicted) {
+      if (!auto) setError('Reload the latest version before saving.');
+      return null;
+    }
+    if (!meta.name.trim()) {
+      if (!auto) setError('Enter a template name.');
+      return null;
+    }
+    if (!design.length && status === 'ready') {
+      if (!auto)
+        setError('Add at least one block before saving as a template.');
+      return null;
+    }
+    if (pending.current) {
+      if (auto) return null;
+      await pending.current.catch(() => {});
+    }
+    const version = currentRecord.current;
+    const payload = {
+      ...meta,
+      design,
+      designSettings,
+      status,
+      expectedRevision: version?.revision,
+      reason: auto ? 'autosave' : 'save',
+    };
+    const task = (async () => {
+      setSaving(true);
+      if (!auto) setError('');
+      try {
+        const templates = window.bulkMail.emailTemplates;
+        const result = version
+          ? await templates.update(version.id, payload)
+          : await templates.create(payload);
+        if (!result.ok) {
+          if (result.conflict) setConflicted(true);
+          throw new Error(result.error);
+        }
+        const { id, revision, status } = result.template;
+        currentRecord.current = { id, revision, status };
+        setRecord(currentRecord.current);
+        setSavedHash(currentHash);
+        setError('');
+        if (!auto)
+          toast(status === 'draft' ? 'Draft saved.' : 'Template saved.');
+        return result.template;
+      } catch (cause) {
+        setError(cause.message);
+        return null;
+      } finally {
+        setSaving(false);
+      }
+    })();
+    pending.current = task;
     try {
-      const input = { ...template, design: blocks, htmlBody: html };
-      const result = template.id
-        ? await window.bulkMail.emailTemplates.update(template.id, input)
-        : await window.bulkMail.emailTemplates.create(input);
-      if (!result.ok) throw new Error(result.error);
-      setTemplate(result.template);
-      toast('Template saved.');
+      return await task;
+    } finally {
+      if (pending.current === task) pending.current = null;
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !ready ||
+      !autosave ||
+      !dirty ||
+      !canEdit ||
+      conflicted ||
+      saving ||
+      !meta.name.trim() ||
+      attemptedAutosave.current === currentHash
+    )
+      return;
+    // Save once per edit snapshot. Errors stay visible until the next edit or an explicit save.
+    const timer = setTimeout(() => {
+      attemptedAutosave.current = currentHash;
+      save(record?.status || 'draft', true);
+    }, 1750);
+    return () => clearTimeout(timer);
+  }, [currentHash, dirty, ready, canEdit, autosave, conflicted, saving]);
+
+  async function reload() {
+    if (
+      !currentRecord.current?.id ||
+      (dirty &&
+        !window.confirm(
+          'Reload the latest version and discard unsaved changes?',
+        ))
+    )
+      return;
+    try {
+      load((await studioRequest('get', currentRecord.current.id)).template);
+    } catch (cause) {
+      setError(cause.message);
+    }
+  }
+
+  async function compileAction(name) {
+    setSending(true);
+    setError('');
+    try {
+      if (name === 'campaign') {
+        const template = await save('ready');
+        if (template) navigate('campaigns', campaignTemplate(template));
+        return;
+      }
+      if (name === 'duplicate') {
+        const saved =
+          dirty || !currentRecord.current
+            ? await save(record?.status || 'draft')
+            : currentRecord.current;
+        if (!saved) return;
+        const result = await studioRequest('duplicate', saved.id);
+        navigate('builder', result.template.id);
+        return;
+      }
+      const result = await studioRequest('render', { design, designSettings });
+      if (name === 'export') {
+        const exported = await studioRequest('exportHtml', {
+          html: result.html,
+          name: meta.name,
+        });
+        if (exported.ok) toast('HTML exported.');
+      } else setDialog({ name, html: result.html });
     } catch (cause) {
       setError(cause.message);
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
-  function download() {
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(
-      new Blob([html], { type: 'text/html;charset=utf-8' }),
-    );
-    link.href = url;
-    link.download =
-      (template.name || 'email').replace(/[^a-z0-9-]/gi, '-') + '.html';
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  function handleKeys(event) {
+    if (
+      !canEdit ||
+      event.defaultPrevented ||
+      (!event.ctrlKey && !event.metaKey) ||
+      event.target.matches('input, textarea, select, [contenteditable]')
+    )
+      return;
+    const key = event.key.toLowerCase();
+    if (!['c', 'v', 'z', 'y'].includes(key)) return;
+    if ((key === 'c' && !block) || (key === 'v' && !clipboardBlock)) return;
+    event.preventDefault();
+    if (key === 'c') copy();
+    else if (key === 'v') paste();
+    else if (key === 'y' || event.shiftKey) redo();
+    else undo();
   }
+  const close = () => setDialog(null);
 
   return (
-    <form className="studio-page" onSubmit={save}>
-      <PageHeading
-        title="Email builder"
-        actions={
-          <>
-            <Action onClick={() => navigate('templates')}>
-              Template library
-            </Action>
-            <Action onClick={download} disabled={!blocks.length}>
-              Export HTML
-            </Action>
-            {canEdit && (
-              <Action primary type="submit" disabled={busy}>
-                Save template
-              </Action>
+    <section
+      className="email-builder"
+      aria-label="Email builder"
+      onKeyDown={handleKeys}
+    >
+      <div className="email-editor-header">
+        <div className="email-editor-title">
+          <button
+            type="button"
+            className="email-back"
+            title="Template library"
+            aria-label="Back to template library"
+            onClick={() => navigate('templates')}
+          >
+            <ArrowLeft size={19} />
+          </button>
+          <div>
+            <h1>Email builder</h1>
+            <p>{meta.name || 'Untitled template'}</p>
+          </div>
+        </div>
+        <div className="email-editor-actions">
+          <span
+            className={'email-save-indicator' + (dirty ? ' dirty' : '')}
+            aria-live="polite"
+          >
+            {saving ? (
+              'Saving…'
+            ) : dirty ? (
+              <>
+                <span /> Unsaved changes
+              </>
+            ) : record ? (
+              <>
+                <Check size={14} /> Saved
+              </>
+            ) : (
+              'New draft'
             )}
-          </>
-        }
-      />
-      <ErrorText text={error} />
-      <div className="studio-filters">
+          </span>
+          <Action
+            onClick={() => compileAction('preview')}
+            disabled={!design.length || sending}
+          >
+            <Eye size={16} /> Preview
+          </Action>
+          {canEdit && (
+            <>
+              <Action onClick={() => save('draft')} disabled={saving}>
+                Save draft
+              </Action>
+              <Action primary onClick={() => save('ready')} disabled={saving}>
+                <Save size={16} /> Save template
+              </Action>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="email-editor-meta">
         <Field label="Template name">
           <input
-            required
+            aria-label="Template name"
+            value={meta.name}
             maxLength={100}
-            value={template.name}
-            onChange={(e) => setTemplate({ ...template, name: e.target.value })}
             disabled={!canEdit}
+            placeholder="Name this template"
+            onChange={(event) => editMeta('name', event.target.value)}
           />
         </Field>
-        <Field label="Subject">
+        <Field label="Subject line">
           <input
+            value={meta.subject}
             maxLength={200}
-            value={template.subject}
-            onChange={(e) =>
-              setTemplate({ ...template, subject: e.target.value })
-            }
             disabled={!canEdit}
+            placeholder="Email subject"
+            onChange={(event) => editMeta('subject', event.target.value)}
           />
         </Field>
         <Field label="Category">
           <select
-            value={template.category}
-            onChange={(e) =>
-              setTemplate({ ...template, category: e.target.value })
-            }
+            value={meta.category}
             disabled={!canEdit}
+            onChange={(event) => editMeta('category', event.target.value)}
           >
-            {categories.map((item) => (
-              <option key={item}>{item}</option>
+            {categories.map((category) => (
+              <option key={category}>{category}</option>
             ))}
           </select>
         </Field>
+        <Action onClick={() => setDialog({ name: 'details' })}>Details</Action>
+        {canEdit && (
+          <label className="studio-check email-autosave">
+            <input
+              type="checkbox"
+              checked={autosave}
+              onChange={(event) => setAutosave(event.target.checked)}
+            />{' '}
+            Autosave
+          </label>
+        )}
       </div>
-      <div className="studio-builder">
-        <section className="studio-card studio-palette">
-          <h2>Elements</h2>
-          {Object.entries(names).map(([type, label]) => (
-            <button
-              className="studio-button"
-              key={type}
-              type="button"
-              draggable={canEdit}
-              disabled={!canEdit}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('block/type', type);
-                setDrag(type);
-              }}
-              onDragEnd={() => setDrag('')}
-              onClick={() => add(type)}
-            >
-              {label}
-            </button>
-          ))}
+      {error && (
+        <div className="email-editor-error">
+          <TriangleAlert size={17} />
+          <ErrorText text={error} />
+          {conflicted && <Action onClick={reload}>Reload latest</Action>}
+        </div>
+      )}
+      {!ready ? (
+        <p className="studio-empty">Loading template…</p>
+      ) : (
+        <div className="email-editor-grid">
+          <ElementPalette
+            onAdd={(type) => insert(type, design.length)}
+            onMedia={() => setDialog({ name: 'media' })}
+            canEdit={canEdit}
+          />
+          <div className="email-editor-center">
+            <div className="email-canvas-toolbar">
+              <div className="email-tool-group">
+                <Action
+                  title="Undo"
+                  aria-label="Undo"
+                  disabled={!history.past.length || !canEdit}
+                  onClick={undo}
+                >
+                  <Undo2 size={16} />
+                </Action>
+                <Action
+                  title="Redo"
+                  aria-label="Redo"
+                  disabled={!history.next.length || !canEdit}
+                  onClick={redo}
+                >
+                  <Redo2 size={16} />
+                </Action>
+                <Action
+                  title="Copy block"
+                  aria-label="Copy block"
+                  disabled={!block || !canEdit}
+                  onClick={copy}
+                >
+                  <Copy size={15} />
+                </Action>
+                <Action
+                  title="Paste block"
+                  aria-label="Paste block"
+                  disabled={!clipboardBlock || !canEdit}
+                  onClick={paste}
+                >
+                  <ClipboardPaste size={15} />
+                </Action>
+              </div>
+              <DeviceButtons value={device} onChange={setDevice} />
+              <div className="email-tool-group email-zoom">
+                <Action
+                  title="Zoom out"
+                  aria-label="Zoom out"
+                  disabled={zoom <= 50}
+                  onClick={() => setZoom(zoom - 10)}
+                >
+                  <Minus size={15} />
+                </Action>
+                <button
+                  type="button"
+                  title="Reset zoom"
+                  onClick={() => setZoom(100)}
+                >
+                  {zoom}%
+                </button>
+                <Action
+                  title="Zoom in"
+                  aria-label="Zoom in"
+                  disabled={zoom >= 150}
+                  onClick={() => setZoom(zoom + 10)}
+                >
+                  <Plus size={15} />
+                </Action>
+              </div>
+            </div>
+            <EmailCanvas
+              design={design}
+              settings={designSettings}
+              selected={selected}
+              onSelect={select}
+              onDrop={onDrop}
+              onMove={move}
+              onDuplicate={duplicate}
+              onDelete={remove}
+              onPatch={patch}
+              canEdit={canEdit}
+              width={width}
+              zoom={zoom}
+              mobile={device === 'Mobile'}
+              remote={remote}
+            />
+          </div>
+          <Inspector
+            block={block}
+            settings={designSettings}
+            tab={inspectorTab}
+            onTab={setInspectorTab}
+            onPatch={(value) => block && patch(block.id, value)}
+            onSettings={(value) =>
+              commit((state) => ({
+                ...state,
+                designSettings: { ...state.designSettings, ...value },
+              }))
+            }
+            onLink={() => setDialog({ name: 'link' })}
+            onMedia={() => setDialog({ name: 'media', blockId: block?.id })}
+            canEdit={canEdit}
+          />
+        </div>
+      )}
+      <div className="email-editor-footer">
+        <label className="studio-check">
+          <input
+            type="checkbox"
+            checked={remote}
+            onChange={(event) => setRemote(event.target.checked)}
+          />{' '}
+          Show remote images
+        </label>
+        <div className="studio-actions">
           {canEdit && (
-            <Field label="Import HTML">
+            <>
               <input
                 type="file"
                 accept=".html,.htm,text/html"
-                onChange={async (e) => {
-                  const file = e.target.files[0];
-                  if (file?.size > 500000)
-                    setError('HTML can be up to 500 KB.');
-                  else if (file) add('html', blocks.length, await file.text());
+                ref={htmlInput}
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files[0];
+                  event.target.value = '';
+                  if (file) importHtml(file);
                 }}
+              />
+              <Action onClick={() => htmlInput.current.click()}>
+                <Upload size={15} /> Import HTML
+              </Action>
+            </>
+          )}
+          <Action
+            disabled={!design.length || sending}
+            onClick={() => compileAction('source')}
+          >
+            <Code2 size={15} /> HTML source
+          </Action>
+          <Action
+            disabled={!design.length || sending}
+            onClick={() => compileAction('checks')}
+          >
+            <ShieldCheck size={15} /> Check email
+          </Action>
+          <Action
+            disabled={!design.length || sending}
+            onClick={() => compileAction('export')}
+          >
+            <Download size={15} /> Export
+          </Action>
+          {canEdit && (
+            <>
+              <Action
+                disabled={!record || saving}
+                onClick={() => setDialog({ name: 'history' })}
+              >
+                <History size={15} /> Versions
+              </Action>
+              <Action
+                disabled={!design.length || sending}
+                onClick={() => compileAction('duplicate')}
+              >
+                <Copy size={14} /> Duplicate
+              </Action>
+            </>
+          )}
+          {canSend && (
+            <Action
+              disabled={!design.length || sending}
+              onClick={() => compileAction('test')}
+            >
+              <Send size={15} /> Send test
+            </Action>
+          )}
+          {canEdit && (
+            <Action
+              primary
+              disabled={!design.length || sending || saving}
+              onClick={() => compileAction('campaign')}
+            >
+              Use in campaign
+            </Action>
+          )}
+        </div>
+      </div>
+      {dialog?.name === 'preview' && (
+        <PreviewDialog
+          html={dialog.html}
+          subject={meta.subject}
+          onClose={close}
+          initialDevice={device}
+        />
+      )}
+      {dialog?.name === 'checks' && (
+        <ChecksDialog html={dialog.html} onClose={close} />
+      )}
+      {dialog?.name === 'test' && (
+        <TestDialog
+          html={dialog.html}
+          suggestedSubject={meta.subject}
+          text={meta.textBody}
+          userEmail={userEmail}
+          onClose={close}
+        />
+      )}
+      {dialog?.name === 'history' && record && (
+        <HistoryDialog
+          id={record.id}
+          revision={record.revision}
+          onRestore={load}
+          onClose={close}
+        />
+      )}
+      {dialog?.name === 'link' && block && (
+        <LinkDialog
+          block={block}
+          onApply={(value) => {
+            patch(block.id, value);
+            close();
+          }}
+          onClose={close}
+        />
+      )}
+      {dialog?.name === 'media' && (
+        <MediaLibrary
+          canEdit={canEdit}
+          onClose={close}
+          onPick={(item) => {
+            if (!canEdit) return;
+            const value = {
+              mediaId: item.id,
+              imageUrl: '',
+              imageWidth: Math.min(560, item.width),
+            };
+            const target = design.find(
+              (entry) =>
+                entry.id === dialog.blockId && imageKinds.includes(entry.type),
+            );
+            if (target)
+              patch(target.id, {
+                ...value,
+                ...(target.type === 'logo'
+                  ? { imageWidth: Math.min(144, item.width) }
+                  : {}),
+              });
+            else insert('image', design.length, value);
+            close();
+          }}
+        />
+      )}
+      {dialog?.name === 'details' && (
+        <Modal title="Template details" onClose={close}>
+          <div className="studio-form">
+            <Field label="Description" wide>
+              <textarea
+                disabled={!canEdit}
+                rows={3}
+                maxLength={500}
+                value={meta.description}
+                onChange={(event) =>
+                  editMeta('description', event.target.value)
+                }
               />
             </Field>
-          )}
-        </section>
-        <section className="studio-card studio-canvas">
-          <div className="studio-actions">
-            <Action
-              disabled={!history.past.length}
-              onClick={() =>
-                setHistory((old) => ({
-                  past: old.past.slice(0, -1),
-                  current: old.past.at(-1),
-                  next: [old.current, ...old.next],
-                }))
-              }
-            >
-              Undo
-            </Action>
-            <Action
-              disabled={!history.next.length}
-              onClick={() =>
-                setHistory((old) => ({
-                  past: [...old.past, old.current],
-                  current: old.next[0],
-                  next: old.next.slice(1),
-                }))
-              }
-            >
-              Redo
-            </Action>
-            {devices.map(([label, value, Icon]) => (
-              <Action
-                title={label}
-                aria-label={label + ' preview'}
-                aria-pressed={width === value}
-                key={label}
-                onClick={() => setWidth(value)}
-              >
-                <Icon size={16} />
-              </Action>
-            ))}
-          </div>
-          <div
-            className={'studio-blocks' + (drag ? ' dragging' : '')}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => drop(e, blocks.length)}
-          >
-            {!blocks.length && (
-              <p className="studio-empty">
-                Drag elements here or select one from the palette.
-              </p>
-            )}
-            {blocks.map((item, index) => (
-              <button
-                type="button"
-                key={item.id}
-                className={
-                  'studio-block' + (selected === item.id ? ' selected' : '')
-                }
-                onClick={() => setSelected(item.id)}
-                draggable={canEdit}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData('block/id', item.id);
-                  setDrag(item.id);
-                }}
-                onDragEnd={() => setDrag('')}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => drop(e, index)}
-              >
-                <GripVertical size={15} />
-                <strong>{names[item.type] ?? item.type}</strong>
-                <span>{item.type !== 'html' && item.content}</span>
-              </button>
-            ))}
-          </div>
-          <div className="studio-builder-preview" style={{ maxWidth: width }}>
-            <label className="studio-check">
-              <input
-                type="checkbox"
-                checked={showRemoteImages}
-                onChange={(event) => setShowRemoteImages(event.target.checked)}
+            <Field label="Plain-text version" wide>
+              <textarea
+                disabled={!canEdit}
+                rows={7}
+                value={meta.textBody}
+                onChange={(event) => editMeta('textBody', event.target.value)}
               />
-              Load remote images in preview
-            </label>
-            <EmailPreviewFrame
-              title="Live email preview"
-              className="studio-email-frame"
-              htmlBody={html}
-              showRemoteImages={showRemoteImages}
-            />
+            </Field>
+            <div className="studio-wide studio-actions">
+              <Action primary onClick={close}>
+                Done
+              </Action>
+            </div>
           </div>
-        </section>
-        <section className="studio-card studio-properties">
-          <h2>Properties</h2>
-          {!block && <p className="studio-empty">Select an element.</p>}
-          {block && (
-            <fieldset disabled={!canEdit}>
-              <legend>{names[block.type]}</legend>
-              {!['spacer', 'divider', 'social'].includes(block.type) && (
-                <Field
-                  label={block.type === 'html' ? 'HTML source' : 'Content'}
-                >
-                  <textarea
-                    rows={block.type === 'html' ? 10 : 3}
-                    value={block.content}
-                    onChange={(e) => update('content', e.target.value)}
-                  />
-                </Field>
-              )}
-              {['two', 'three'].includes(block.type) && (
-                <Field label="Column two">
-                  <textarea
-                    value={block.second}
-                    onChange={(e) => update('second', e.target.value)}
-                  />
-                </Field>
-              )}
-              {block.type === 'three' && (
-                <Field label="Column three">
-                  <textarea
-                    value={block.third}
-                    onChange={(e) => update('third', e.target.value)}
-                  />
-                </Field>
-              )}
-              {['image', 'logo', 'button', 'social'].includes(block.type) && (
-                <Field label={block.type === 'social' ? 'LinkedIn URL' : 'URL'}>
-                  <input
-                    type="url"
-                    value={block.url}
-                    onChange={(e) => update('url', e.target.value)}
-                  />
-                </Field>
-              )}
-              {block.type === 'social' && (
-                <>
-                  {[
-                    ['url2', 'Instagram URL'],
-                    ['url3', 'Facebook URL'],
-                  ].map(([key, label]) => (
-                    <Field key={key} label={label}>
-                      <input
-                        type="url"
-                        value={block[key]}
-                        onChange={(e) => update(key, e.target.value)}
-                      />
-                    </Field>
-                  ))}
-                </>
-              )}
-              <Field label="Alignment">
-                <select
-                  value={block.align}
-                  onChange={(e) => update('align', e.target.value)}
-                >
-                  {['left', 'center', 'right'].map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Typeface">
-                <select
-                  value={block.family}
-                  onChange={(e) => update('family', e.target.value)}
-                >
-                  {fonts.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </Field>
-              <div className="studio-property-grid">
-                {[
-                  [
-                    'font',
-                    block.type === 'spacer' ? 'Height' : 'Font size',
-                    100,
-                  ],
-                  ['padding', 'Padding', 80],
-                  ['margin', 'Top margin', 80],
-                  ['radius', 'Border radius', 50],
-                ].map(([key, label, max]) => (
-                  <Field key={key} label={label}>
-                    <input
-                      type="number"
-                      min={0}
-                      max={max}
-                      value={block[key]}
-                      onChange={(e) => update(key, e.target.value)}
-                    />
-                  </Field>
-                ))}
-                {[
-                  ['color', 'Text color'],
-                  ['background', 'Background'],
-                  ...(block.type === 'button'
-                    ? [['buttonColor', 'Button color']]
-                    : []),
-                ].map(([key, label]) => (
-                  <Field key={key} label={label}>
-                    <input
-                      type="color"
-                      value={block[key]}
-                      onChange={(e) => update(key, e.target.value)}
-                    />
-                  </Field>
-                ))}
-              </div>
-              <div className="studio-actions">
-                <Action
-                  disabled={blocks.indexOf(block) === 0}
-                  onClick={() => move(block.id, blocks.indexOf(block) - 1)}
-                >
-                  Move up
-                </Action>
-                <Action
-                  disabled={blocks.indexOf(block) === blocks.length - 1}
-                  onClick={() => move(block.id, blocks.indexOf(block) + 1)}
-                >
-                  Move down
-                </Action>
-                <Action
-                  disabled={blocks.length >= 100}
-                  onClick={() => {
-                    const id = crypto.randomUUID();
-                    commit((current) => [...current, { ...block, id }]);
-                    setSelected(id);
-                  }}
-                >
-                  Duplicate
-                </Action>
-                <Action
-                  danger
-                  onClick={() => {
-                    commit((current) =>
-                      current.filter((item) => item.id !== block.id),
-                    );
-                    setSelected(null);
-                  }}
-                >
-                  Remove
-                </Action>
-              </div>
-            </fieldset>
-          )}
-        </section>
+        </Modal>
+      )}
+      {dialog?.name === 'source' && (
+        <SourceDialog html={dialog.html} onClose={close} />
+      )}
+    </section>
+  );
+}
+
+function SourceDialog({ html, onClose }) {
+  const [error, setError] = useState('');
+  const toast = useToast();
+  async function copy() {
+    try {
+      await studioRequest('copyHtml', { html });
+      toast('HTML source copied.');
+    } catch (cause) {
+      setError(cause.message);
+    }
+  }
+  return (
+    <Modal title="Email HTML source" onClose={onClose} size="max-w-5xl">
+      <div className="email-dialog-toolbar">
+        <Action onClick={copy}>
+          <Copy size={15} /> Copy HTML
+        </Action>
       </div>
-    </form>
+      <ErrorText text={error} />
+      <textarea
+        className="email-source-code"
+        rows={20}
+        readOnly
+        value={html}
+        aria-label="Generated email HTML"
+      />
+    </Modal>
   );
 }

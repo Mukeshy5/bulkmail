@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { openDatabase } from './database.js';
 import { notify, settings } from './operations.js';
 
 const tables = [
@@ -15,6 +16,9 @@ const tables = [
   'contact_list_members',
   'contact_segments',
   'email_templates',
+  'email_template_favorites',
+  'email_template_versions',
+  'email_media',
   'smtp_accounts',
   'campaigns',
   'campaign_lists',
@@ -89,10 +93,15 @@ export async function restoreBackup(db, filename) {
     readonly: true,
     fileMustExist: true,
   });
+  const staging = db.name + '.' + randomUUID() + '.restore';
+  let restorePath = filename;
+  let attached = false;
   try {
+    const version = backup.pragma('user_version', { simple: true });
+    const activeVersion = db.pragma('user_version', { simple: true });
     if (
-      backup.pragma('user_version', { simple: true }) !==
-        db.pragma('user_version', { simple: true }) ||
+      version < 1 ||
+      version > activeVersion ||
       backup.pragma('quick_check', { simple: true }) !== 'ok' ||
       !backup
         .prepare(
@@ -102,15 +111,18 @@ export async function restoreBackup(db, filename) {
     ) {
       return {
         ok: false,
-        error:
-          'Choose a healthy backup created by this version with an active Super Admin.',
+        error: 'Choose a healthy workspace backup with an active Super Admin.',
       };
     }
-  } finally {
+    if (version < activeVersion) {
+      await backup.backup(staging);
+      const upgraded = openDatabase(staging);
+      upgraded.close();
+      restorePath = staging;
+    }
     backup.close();
-  }
-  db.prepare('ATTACH DATABASE ? AS restore_source').run(filename);
-  try {
+    db.prepare('ATTACH DATABASE ? AS restore_source').run(restorePath);
+    attached = true;
     db.transaction(() => {
       db.pragma('defer_foreign_keys = ON');
       db.exec(
@@ -176,7 +188,9 @@ export async function restoreBackup(db, filename) {
       );
     }).immediate();
   } finally {
-    db.exec('DETACH DATABASE restore_source');
+    if (attached) db.exec('DETACH DATABASE restore_source');
+    if (backup.open) backup.close();
+    await rm(staging, { force: true });
   }
   return { ok: true };
 }

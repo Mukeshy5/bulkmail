@@ -101,11 +101,32 @@ contextBridge.exposeInMainWorld('bulkMail', {
   },
   emailTemplates: {
     list: () => ipcRenderer.invoke('email-templates:list'),
+    get: (id) => ipcRenderer.invoke('email-templates:get', id),
     create: (input) => ipcRenderer.invoke('email-templates:create', input),
     update: (id, input) =>
       ipcRenderer.invoke('email-templates:update', { id, input }),
     duplicate: (id) => ipcRenderer.invoke('email-templates:duplicate', id),
     delete: (id) => ipcRenderer.invoke('email-templates:delete', id),
+    favorite: (input) => ipcRenderer.invoke('email-templates:favorite', input),
+    versions: (id) => ipcRenderer.invoke('email-templates:versions', id),
+    restoreVersion: (input) =>
+      ipcRenderer.invoke('email-templates:restore-version', input),
+    render: (input) => ipcRenderer.invoke('email-templates:render', input),
+    link: (input) => ipcRenderer.invoke('email-templates:link', input),
+    openLink: (input) => ipcRenderer.invoke('desktop:open-email-link', input),
+    inspect: (input) => ipcRenderer.invoke('email-templates:inspect', input),
+    portable: (input) => ipcRenderer.invoke('email-templates:portable', input),
+    exportHtml: (input) =>
+      ipcRenderer.invoke('email-templates:export-html', input),
+    copyHtml: (input) => ipcRenderer.invoke('desktop:copy-email-html', input),
+    test: (input) => ipcRenderer.invoke('email-templates:test', input),
+  },
+  emailMedia: {
+    list: (search) => ipcRenderer.invoke('email-media:list', search),
+    get: (id) => ipcRenderer.invoke('email-media:get', id),
+    upload: (input) => ipcRenderer.invoke('email-media:upload', input),
+    crop: (input) => ipcRenderer.invoke('email-media:crop', input),
+    delete: (id) => ipcRenderer.invoke('email-media:delete', id),
   },
   campaigns: {
     list: (search) => ipcRenderer.invoke('campaigns:list', search),

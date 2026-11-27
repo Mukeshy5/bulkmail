@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import templateStudioSchema from './template-studio-schema.js';
 import { seedTemplateCatalog } from './template-catalog.js';
 import workspaceSchema from './workspace-schema.js';
 
@@ -188,6 +189,7 @@ const migrations = [
   END;
   CREATE TABLE webhook_receipts (token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL);`,
   "ALTER TABLE smtp_accounts ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'password' CHECK (auth_type IN ('password', 'google', 'microsoft'));",
+  templateStudioSchema,
 ];
 
 export function openDatabase(databasePath) {

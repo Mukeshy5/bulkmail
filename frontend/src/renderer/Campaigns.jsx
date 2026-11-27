@@ -331,7 +331,27 @@ function Draft({ draft, resources, onClose, onSaved }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (key, value) =>
-    setForm((previous) => ({ ...previous, [key]: value }));
+    setForm((previous) => {
+      const source = resources.templates.find(
+        (item) => item.id === previous.templateId,
+      );
+      if (
+        key === 'templateId' &&
+        previous.customHtml &&
+        (previous.customHtml === draft.customHtml ||
+          previous.customHtml === source?.htmlBody)
+      ) {
+        const nextTemplate = resources.templates.find(
+          (item) => item.id === value,
+        );
+        return {
+          ...previous,
+          templateId: value,
+          customHtml: nextTemplate?.htmlBody || '',
+        };
+      }
+      return { ...previous, [key]: value };
+    });
   const text = (key) => ({
     value: form[key],
     onChange: (e) => set(key, e.target.value),
@@ -512,7 +532,7 @@ function Draft({ draft, resources, onClose, onSaved }) {
               />
             </Field>
             <Field label="Custom HTML (overrides template)" wide>
-              <textarea rows={7} maxLength={500000} {...text('customHtml')} />
+              <textarea rows={7} maxLength={512000} {...text('customHtml')} />
             </Field>
           </>
         )}
