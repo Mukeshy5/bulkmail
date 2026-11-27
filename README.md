@@ -8,6 +8,7 @@ Use Node.js 24 and npm. Start the backend in one PowerShell terminal:
 
 ```powershell
 cd backend
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 npm ci
 npm start
 ```
@@ -16,11 +17,17 @@ Start the Electron frontend in a second terminal:
 
 ```powershell
 cd frontend
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 npm ci
 npm start
 ```
 
-The desktop app connects to the backend API at `http://127.0.0.1:3002`. The backend owns authentication, SMTP credentials, contacts, campaigns, the delivery queue, reports, and backups. It creates and migrates `backend/data/bulk-mail-sender.sqlite` by default. Set `BULK_MAIL_DB_PATH` in `backend/.env` to use another backend database location. If you change `DESKTOP_API_PORT` in that file, set `BULK_MAIL_API_URL` in the terminal that launches Electron, for example `$env:BULK_MAIL_API_URL = 'http://127.0.0.1:3032'`. The desktop API stays bound to loopback and should remain outside the public reverse proxy.
+The desktop app connects to the backend API at `http://127.0.0.1:3002`. The backend owns authentication, SMTP credentials, contacts, campaigns, the delivery queue, reports, and backups. It creates and migrates `backend/data/bulk-mail-sender.sqlite` by default.
+
+- `backend/.env` sets the desktop API port, public service port, database path, and optional integrations. Relative database paths resolve from `backend`.
+- `frontend/.env` sets `BULK_MAIL_API_URL`. Match its port to `DESKTOP_API_PORT` in `backend/.env` and restart the frontend after changing it. Vite reads the URL at development startup and when packaging. For an installed app, a launch-time `BULK_MAIL_API_URL` or `--bulk-mail-api-url` overrides the bundled URL.
+
+Keep SMTP credentials and integration secrets in the backend. The desktop API stays bound to loopback and should remain outside the public reverse proxy.
 
 Create the Super Admin account on a new database. The Users page can then create additional accounts and adjust editing and sending permissions. Generate and save a one-time recovery code from Settings. Electron can remember a sign-in by storing an encrypted backend session token in its user profile.
 

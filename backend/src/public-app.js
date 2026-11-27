@@ -560,7 +560,7 @@ function createApp(
   return app;
 }
 
-function createConfirmationSender(config) {
+function createConfirmationSender(config, port) {
   let sendConfirmation;
   if (
     config.CONFIRM_SMTP_HOST &&
@@ -568,7 +568,6 @@ function createConfirmationSender(config) {
     config.CONFIRM_SMTP_PASSWORD &&
     config.CONFIRM_SMTP_FROM
   ) {
-    const port = Number(config.CONFIRM_SMTP_PORT || 587);
     const smtp = nodemailer.createTransport({
       host: config.CONFIRM_SMTP_HOST,
       port,

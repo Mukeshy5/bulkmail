@@ -14,34 +14,11 @@ import { backendDirectory, databasePath } from './src/data-path.js';
 import { loadCredentialStore } from './src/credential-store.js';
 import { createDeliveryWorker } from './src/delivery-service.js';
 import { automaticBackup } from './src/backup-service.js';
-
-function servicePort(value, fallback, name) {
-  const port = Number(value || fallback);
-  if (!Number.isInteger(port) || port < 1 || port > 65535)
-    throw new Error('Set a valid ' + name + ' in backend/.env.');
-  return port;
-}
+import { validateBackendConfig } from './src/config.js';
 
 export async function startServices(config) {
-  const desktopPort = servicePort(
-    config.DESKTOP_API_PORT,
-    3002,
-    'DESKTOP_API_PORT',
-  );
-  const publicPort = servicePort(config.PORT, 3001, 'PORT');
-  if (desktopPort === publicPort)
-    throw new Error(
-      'Use different ports for the desktop API and public service.',
-    );
-  if (
-    config.PUBLIC_URL &&
-    (!config.PUBLIC_URL.startsWith('https://') ||
-      new URL(config.PUBLIC_URL).origin !== config.PUBLIC_URL)
-  ) {
-    throw new Error(
-      'PUBLIC_URL must be an HTTPS origin without a trailing slash.',
-    );
-  }
+  const { desktopPort, publicPort, confirmationPort } =
+    validateBackendConfig(config);
 
   const filename = databasePath(config);
   await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -101,7 +78,7 @@ export async function startServices(config) {
       restoreWithWorker,
     });
     const publicRoutes = createPublicApp(db, config, {
-      sendConfirmation: createConfirmationSender(config),
+      sendConfirmation: createConfirmationSender(config, confirmationPort),
     });
     for (const [router, port] of [
       [desktop, desktopPort],

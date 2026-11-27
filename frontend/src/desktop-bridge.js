@@ -102,6 +102,7 @@ function desktopOrigin() {
   const configured =
     app.commandLine.getSwitchValue('bulk-mail-api-url') ||
     process.env.BULK_MAIL_API_URL ||
+    __BULK_MAIL_API_URL__ ||
     'http://127.0.0.1:3002';
   try {
     const url = new URL(configured);
